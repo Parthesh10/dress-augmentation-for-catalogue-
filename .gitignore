@@ -1,0 +1,18 @@
+.venv/
+work/
+output/
+__pycache__/
+*.pyc
+
+# Datasets and anything cut from them. Not ours to redistribute, large, and
+# regenerable from the download commands in docs/01-datasets.md.
+data/raw/
+data/fixtures/
+
+# The shop's own garment photographs, once they exist. Same reasoning as the
+# sibling project: source photography is not pushed to a remote.
+data/incoming/
+
+# Batch logs and comparison sheets. Regenerable; what matters is transcribed
+# into TASK.md.
+work-reports/

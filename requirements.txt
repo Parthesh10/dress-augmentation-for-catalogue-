@@ -1,0 +1,8 @@
+# Operator machine. No torch here on purpose -- matting runs in a separate
+# interpreter shared with the sibling project, so this stays a small install.
+pillow>=10.4
+numpy>=1.26
+
+# Reading the dataset shards. Only needed to cut fixtures, not to run the
+# pipeline.
+pyarrow>=15.0

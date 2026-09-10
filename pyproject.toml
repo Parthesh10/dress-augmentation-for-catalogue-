@@ -1,0 +1,5 @@
+[project]
+name = "dressaug"
+version = "0.1.0"
+description = "Image pipeline for women's occasionwear catalogue photography"
+requires-python = ">=3.11"
