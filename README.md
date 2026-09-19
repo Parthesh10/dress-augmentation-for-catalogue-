@@ -33,7 +33,7 @@ so a run can never look more finished than it is.
 ΔE2000 between 0.16 and 0.20 against a 3.0 budget. Roughly 50-75 s per image
 on CPU. Comparison sheet in `work-reports/phase1-2/`.
 
-**31 tests, one command:** `.venv\Scripts\python.exe tests\run_all.py`
+**41 tests, one command:** `.venv\Scripts\python.exe tests\run_all.py`
 
 ---
 
@@ -45,6 +45,10 @@ $env:PYTHONPATH="src"
 ```
 
 Opens at `http://127.0.0.1:7860`. Upload a photograph, choose garment type, fabric, a backdrop (by name or by eye), and export sizes; click Process. Recolour is shown, disabled, labelled "coming soon" -- not built yet, and not hidden either.
+
+**Accepts iPhone photos (.heic/.heif) directly**, added 2026-09-19 -- Pillow
+has never shipped a HEIF decoder, so every photo straight off a phone failed
+before this. See [TASK.md §1c](TASK.md).
 
 ---
 
@@ -110,6 +114,24 @@ shop's own photographs** — [TASK.md §5](TASK.md) says what a useful first set
 looks like.
 
 ---
+
+## Grounding fix, 2026-09-19
+
+Reported plainly: "looks like floating in air, definitely edited". Correct,
+and two real causes, both fixed. A subject was placed **centred** in the
+canvas -- equal empty backdrop above the head and below the feet, which no
+real full-length photograph is framed like -- and had **no shadow at all**,
+so nothing established contact with a surface. Fixed both: subjects now
+anchor near the bottom of the frame with headroom above, and a soft contact
+shadow is cast from wherever the subject's own alpha actually lands.
+
+**Honest limit, stated rather than hidden:** grounding fixes what the
+pipeline was doing wrong. It does not fix a source photograph of a genuine
+mid-air jump looking like a mid-air jump, and it does not match a backdrop's
+soft studio lighting to a subject photographed under hard outdoor sun --
+that would need a relighting model, not deterministic placement. Full
+account, including exact before/after pixel measurements on a real
+photograph, in [TASK.md §1d](TASK.md).
 
 ## Halo fix, 2026-09-19
 

@@ -171,6 +171,175 @@ on disk, so this does not silently regress -- but it is not a substitute for
 testing against the shop's own first real photographs once they exist.
 ---
 
+## 1c. HEIC support, and a discovery worth flagging, 2026-09-19
+
+### The bug
+
+Every `.heic`/`.heif` photo failed at `ingest` with `UnidentifiedImageError:
+cannot identify image file`. Pillow has never shipped a HEIF decoder — a
+patent-licensing decision upstream, not an oversight — so any photo straight
+off an iPhone (HEIC by default since iOS 11, 2017) failed before the pipeline
+did anything.
+
+### The fix, and why it lives in `__init__.py` specifically
+
+`pillow_heif.register_heif_opener()` now runs at `import dressaug` time, in
+the package's own `__init__.py` — not in `stages.py`, where the actual
+`Image.open()` call for the CLI path lives. That placement matters: Gradio's
+own upload handling calls `PIL.Image.open()` directly, with no format
+allowlist beyond a special case for SVG (confirmed by reading
+`gradio.image_utils.preprocess_image` rather than assumed). A HEIC file
+uploaded through the app is decoded by *Gradio*, before `dressaug.ui`'s own
+code ever sees it — registering downstream of that would fix the CLI and
+leave the app broken. `import dressaug` is the one thing guaranteed to run
+before either path touches an image.
+
+**4 new tests** in `tests/test_heic.py`, all against a *synthetic* HEIC file
+generated on the fly by `pillow_heif` itself — never a copy of the operator's
+real photos. One pins the actual mechanism (the opener really is registered
+in Pillow's table after nothing but `import dressaug`), one round-trips a
+real HEIC through plain `PIL.Image.open()`, one runs the real `ingest` stage,
+and one confirms HEIC support didn't accidentally bypass the existing
+size-floor rejection.
+
+### The discovery: real stock photography, already on disk
+
+While reproducing the bug, `test-images/Photos_/` turned out to hold **136
+real HEIC files and 31 JPGs** — genuine garment photography, not a synthetic
+fixture or a public dataset. **This folder was not gitignored and was one
+`git add -A` away from committing the operator's private stock into version
+control.** Fixed immediately, before anything else, in the same commit as
+the HEIC support: `test-images/` added to `.gitignore`, same discipline as
+`data/incoming/` and every other private-photo folder this project touches.
+
+One file (`IMG_8262.HEIC`) was run through the full pipeline as part of
+verifying the fix, not left untested once it opened: 3024×4032, well above
+the resolution floor, and it is **a lehenga** — full skirt, fitted blouse,
+dupatta thrown out mid-motion — the one category every dataset search in
+§1.6 came back empty on. Background removed cleanly, full person preserved
+(hair, both extended arms, the whole spread of the skirt), composited onto
+`studio_ivory` at ΔE2000 0.17. One honest warning worth keeping: it was run
+with `garment=SAREE` as a guessed default (that field has to be set by
+whoever runs it; the pipeline cannot see what a photograph contains) and the
+sheer-fabric check correctly flagged that the actual fabric declared didn't
+match what the matte found — the check working as designed, not a bug.
+
+**This is the real catalogue this project has needed since 2026-09-11.** Not
+processed further without being asked — 136 files at roughly a minute each
+is well over two hours of unattended compute, and the operator should decide
+whether and how to work through their own stock before more of it is run.
+---
+
+## 1d. "Looks like floating in air, definitely edited" — grounding, 2026-09-19
+
+### The complaint, and why it was right
+
+The champagne-backdrop render of `IMG_8364` (a real lehenga, mid-motion) was
+shown and the reaction was immediate and correct: the subject read as pasted
+on, not photographed. Two separate, real causes, both found by measuring the
+actual pixels rather than guessing:
+
+**1. No shadow at all.** `stages.py` had `place()` and `compose()` built from
+scratch for this project and never got the sibling's contact-shadow logic
+ported. Every composite before this was a subject on a flat gradient with
+nothing establishing contact with a surface.
+
+**2. Vertical centring.** `place()` centred the bounding box in the canvas —
+`oy = ch/2 - nh/2` — which puts equal empty backdrop above the head and below
+the feet. No real full-length photograph is framed that way; the convention
+is a small margin below and the rest of the slack as headroom above. This
+turned out to matter more than the shadow: a perfectly placed shadow under
+feet that are themselves floating in the vertical middle of the canvas still
+does not read as grounded, because there is visibly empty space beneath the
+shadow too.
+
+### The fixes
+
+**`stages.contact_shadow`** (new): a soft, blurred shadow read off the
+subject's *own* contact band — the bottom slice of its already-placed alpha —
+rather than a floor line guessed independently of where the subject actually
+landed. Two iterations, both measured on the real photograph before being
+trusted:
+
+- **v1** centred the shadow almost exactly on the contact line. Measured
+  directly on the rendered output: only ~4-6% darkening at the point closest
+  to the subject, because half the shadow's own Gaussian peak fell under the
+  subject's opaque pixels and was overwritten when the product was pasted —
+  invisible at normal viewing size.
+- **v2** offsets the shadow by 85% of its own vertical radius below the
+  contact line, and scales the blur to the shadow's own size rather than a
+  fixed fraction of the canvas. Re-measured: the visible darkening roughly
+  tripled and now extends over a wider band rather than fading immediately.
+  `contact_shadow_opacity` raised from an initial 0.38 to 0.45 to match.
+
+**`place()`'s vertical anchor**, changed from centring to
+`oy = ch - nh - bottom_margin` — almost all slack goes above as headroom, a
+small fixed margin (`THRESHOLDS.bottom_margin`, 5% of canvas height) stays
+below. Horizontal centring is untouched; a garment is not asymmetric the way
+a standing figure's headroom-vs-footroom is.
+
+Both threaded the backdrop's own key-light direction through `composite()`
+and `export()` (`ctx.extra["key_direction"]`, which existed already but was
+never passed to `compose()`), so the shadow's slight horizontal offset agrees
+with where the backdrop's light is supposed to be coming from rather than
+being arbitrary.
+
+**7 new tests**, all in `tests/test_pipeline.py`: the shadow appears near a
+synthetic figure's feet and is genuinely visible outside the region the
+product's own paste will overwrite (the specific failure v1 had); no shadow
+appears far from the subject or when there is nothing at the frame's bottom
+edge to ground; the offset direction responds to `key_dir`; both registered
+stages actually thread `key_direction` through rather than falling back to
+a default; and the bottom-anchoring itself, checked directly against
+`THRESHOLDS.bottom_margin`.
+
+### Re-verified on both real photographs, not just synthetic fixtures
+
+`IMG_8364` (the original complaint — a lehenga in a dynamic mid-air spin) and
+`IMG_8300` (a second, calmer photo of the same person in a Garba/dandiya
+pose, skirt pooling on the ground) were both re-rendered after the fix. Gates
+held: colour fidelity 0.18 and 0.06 respectively against a 3.0 budget,
+framing and cutout-softness unaffected — the grounding fix touches placement
+and the backdrop only, never the product's own pixels or colour.
+
+**The improvement is real and visible on both, and it is honestly stronger on
+the second.** `IMG_8300`'s calmer, weight-settled pose now reads as a
+standing figure with normal headroom and a real shadow beneath the skirt.
+`IMG_8364` is better than before — properly anchored near the bottom now,
+which it was not — but a mid-air twirl with one foot barely visible is
+genuinely one of the harder cases for *any* grounding technique, because part
+of what makes it look "in the air" is that **the photograph is of a moment in
+the air** — no compositing fix removes that, because it was never a
+compositing problem alone. This is stated plainly rather than oversold:
+grounding fixes the parts of "looks edited" that came from the pipeline;
+a dynamic action shot will still look dynamic.
+
+### What this means going forward, and what was not attempted
+
+- **Calm, weight-settled, both-feet-grounded photographs will composite most
+  convincingly.** This is now a real recommendation with evidence behind it,
+  not a guess — the same conclusion the sibling project reached about
+  photographing garments flat rather than worn.
+- **Not attempted: relighting the subject to match the backdrop's light
+  direction and hardness.** `IMG_8364` and `IMG_8300` were both shot outdoors
+  under natural light with visible directional highlights on skin and fabric;
+  the procedural backdrops are soft and evenly lit. That mismatch is a real,
+  separate contributor to "looks composited" that grounding does not touch,
+  and fixing it convincingly for a whole photographed person — not a small
+  opaque product, which is what the sibling project's own `relight` stage
+  does — is a substantially harder problem, most plausibly needing a
+  generative relighting model rather than the deterministic arithmetic this
+  pipeline is built from. Flagged as a real limitation, not solved here.
+- **Not attempted: a literal floor plane in the backdrop** (visible ground
+  texture, a horizon line). The shadow-only approach was chosen deliberately
+  because a painted floor would need to be coordinated with wherever `place`
+  puts the subject to avoid a worse mismatch (subject floating above or
+  sinking below a floor line that does not agree with it) — the shadow is
+  self-consistent with placement by construction, because it is measured
+  from the same alpha. Worth revisiting only if the shadow alone proves
+  insufficient across more real photographs.
+---
+
 ## 2. What was inherited, and why
 
 | Taken | From | Why |

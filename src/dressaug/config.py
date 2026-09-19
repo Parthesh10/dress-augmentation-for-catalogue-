@@ -183,6 +183,49 @@ class Thresholds:
     #: swatch rather than as a dress.
     garment_fill: float = 0.88
 
+    # ---- grounding, added 2026-09-19 ----------------------------------------
+    # Found necessary on a real full-length photo: a subject composited onto
+    # a plain gradient with nothing establishing contact with a surface reads
+    # as pasted rather than photographed -- "floating in air", in the words
+    # of the person who noticed it. A soft shadow at the subject's own lowest
+    # contact point (feet, or a garment's hem) is the standard studio-
+    # photography fix, cheaper and more robust than trying to paint an actual
+    # floor plane that would have to be coordinated with wherever `place`
+    # happens to put the subject.
+    #: How dark the contact shadow gets at its centre. Moderate on purpose --
+    #: a shadow strong enough to be unmistakable but not so strong it reads
+    #: as a design element of its own. Raised from an initial 0.38 to 0.45
+    #: after measuring the first value directly on a real photograph and
+    #: finding the visible darkening only ~4-6% at the point closest to the
+    #: subject -- most of the shadow's peak sits under the subject's own
+    #: opaque pixels and is overwritten (see `contact_shadow`'s offset logic).
+    contact_shadow_opacity: float = 0.45
+    #: The contact band read off the bottom of the placed subject, as a
+    #: fraction of its own height -- this is what the shadow's width and
+    #: position are measured from, not a fixed guess independent of the
+    #: actual photograph.
+    contact_shadow_band: float = 0.06
+    #: Below this per-column density in the contact band, a column counts as
+    #: "nothing there to cast a shadow" -- keeps a stray wisp of hair at the
+    #: very edge of the frame from being read as a foot.
+    contact_shadow_min_density: float = 0.05
+    #: Softness of the shadow's edge, as a fraction of the canvas's short
+    #: side. Large on purpose -- a contact shadow that is too crisp looks
+    #: painted on; real bounce light under a standing figure is diffuse.
+    contact_shadow_blur: float = 0.018
+    #: How much empty canvas to leave below the subject's own lowest point,
+    #: as a fraction of canvas height. **The other half of the grounding fix**
+    #: -- `place` used to centre the bounding box vertically, which for a
+    #: full-length photo put equal empty backdrop above the head and below
+    #: the feet. No real full-length photograph is framed that way; the
+    #: convention is a small margin below and the rest of the slack as
+    #: headroom above. Found on the same real photograph as the contact
+    #: shadow -- a shadow correctly placed under feet that are themselves
+    #: floating in the vertical centre of the canvas does not read as
+    #: grounded, because there is visibly empty backdrop beneath the shadow
+    #: too.
+    bottom_margin: float = 0.05
+
     # ---- recolouring (phase 3 and 4) ---------------------------------------
     #: A recolour must not move lightness structure, only hue and chroma.
     #: This is the whole of phase 3's "no change in design": the folds, the

@@ -202,6 +202,77 @@ def test_the_matte_stage_wires_decontamination_in():
     assert "ctx.product = _img(decontaminated)" in src
 
 
+# ---------------------------------------------------------------- grounding
+# The contact shadow, 2026-09-19. Found necessary on a real full-length
+# photograph: a person composited onto a plain gradient with no shadow at
+# all reads as "floating in air" -- not a guess, the actual words used
+# reporting it.
+
+
+def _standing_alpha(size=(300, 500), foot_w=60):
+    """A tall silhouette -- head to feet -- standing on the bottom edge."""
+    a = np.zeros((size[1], size[0]), np.float32)
+    a[20:480, 80:220] = 1.0  # torso/legs, roughly centred
+    cx = size[0] // 2
+    a[470:498, cx - foot_w // 2:cx + foot_w // 2] = 1.0  # feet, near the bottom
+    return a
+
+
+def test_a_grounded_subject_casts_a_shadow_near_its_own_feet():
+    a_res = _standing_alpha()
+    canvas_size = (400, 600)
+    sh = stages.contact_shadow(canvas_size, a_res, ox=50, oy=50)
+    assert sh.max() > 0.15, f"shadow should be clearly present, got max={sh.max():.3f}"
+
+    # It has to actually show up *outside* the subject's own footprint, not
+    # only in the region the subject's opaque pixels will overwrite anyway --
+    # otherwise the fix would be invisible in the final composite, which is
+    # exactly the bug the first version of this had.
+    foot_bottom_canvas_y = 50 + 498
+    below = sh[foot_bottom_canvas_y + 5: foot_bottom_canvas_y + 40, :]
+    assert below.max() > 0.10, (
+        f"shadow should be visible below the feet, not just hidden under "
+        f"them, got max={below.max():.3f} in the band just below contact"
+    )
+
+
+def test_no_shadow_far_from_the_subject():
+    a_res = _standing_alpha()
+    sh = stages.contact_shadow((400, 600), a_res, ox=50, oy=50)
+    assert sh[0:20, :].max() < 0.02, "no shadow should appear near the top of the frame"
+    assert sh[:, 350:400].max() < 0.02, "no shadow should appear far to the side"
+
+
+def test_a_matte_with_nothing_at_the_frame_edge_casts_no_shadow():
+    """No contact band, no shadow -- rather than guessing at a position that
+    was never actually measured from the photograph."""
+    a_res = np.zeros((300, 300), np.float32)
+    a_res[100:150, 100:200] = 1.0  # solid, but nowhere near the bottom edge
+    sh = stages.contact_shadow((400, 400), a_res, ox=50, oy=50)
+    assert sh.max() == 0.0
+
+
+def test_shadow_offset_follows_the_key_light_direction():
+    """The sibling's convention, carried over: the shadow falls away from
+    where the light is supposed to be coming from, not toward it."""
+    a_res = _standing_alpha()
+    left_key = stages.contact_shadow((400, 600), a_res, ox=50, oy=50, key_dir=(-0.3, -0.4))
+    right_key = stages.contact_shadow((400, 600), a_res, ox=50, oy=50, key_dir=(0.3, -0.4))
+    # centre of mass on each side should differ measurably between the two
+    cx_left = (left_key * np.arange(400)).sum() / max(left_key.sum(), 1e-6)
+    cx_right = (right_key * np.arange(400)).sum() / max(right_key.sum(), 1e-6)
+    assert abs(cx_left - cx_right) > 0.5, (cx_left, cx_right)
+
+
+def test_compose_and_export_thread_the_backdrops_own_key_direction():
+    """Not just that contact_shadow works in isolation -- that the registered
+    stages actually pass the backdrop's own key light through to it, rather
+    than silently falling back to a default that may not match."""
+    import inspect
+    src = inspect.getsource(stages.composite) + inspect.getsource(stages.export)
+    assert src.count('ctx.extra.get("key_direction"') == 2
+
+
 # ---------------------------------------------------------------- placement
 
 
@@ -234,6 +305,27 @@ def test_a_tall_garment_fills_the_frame_it_is_given():
     product = Image.new("RGB", size, (30, 40, 90))
     p_res, _, _, _ = stages.place(alpha, product, size)
     assert p_res.size[1] >= size[1] * (THRESHOLDS.garment_fill - 0.02)
+
+
+def test_a_standing_figure_is_anchored_near_the_bottom_not_centred():
+    """The second half of the grounding fix, 2026-09-19. A subject vertically
+    centred in the canvas leaves equal empty backdrop above the head and
+    below the feet, which no real full-length photograph is framed like --
+    found as a direct contributor to a real composite reading as edited."""
+    size = (400, 600)
+    alpha = np.zeros((size[1], size[0]), np.float32)
+    alpha[40:560, 150:250] = 1.0  # a tall standing figure, well short of the canvas
+    product = Image.new("RGB", size, (120, 60, 90))
+
+    p_res, a_res, ox, oy = stages.place(alpha, product, size)
+    top_gap = oy
+    bottom_gap = size[1] - (oy + p_res.size[1])
+    assert bottom_gap < top_gap, (
+        f"expected most of the slack above the subject as headroom, got "
+        f"top_gap={top_gap} bottom_gap={bottom_gap}"
+    )
+    expected_bottom = int(size[1] * THRESHOLDS.bottom_margin)
+    assert abs(bottom_gap - expected_bottom) <= 1, (bottom_gap, expected_bottom)
 
 
 def test_an_empty_matte_is_refused_rather_than_composited():

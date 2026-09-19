@@ -14,7 +14,7 @@ the fractional band *is* the product.
 from __future__ import annotations
 
 import numpy as np
-from PIL import Image, ImageOps
+from PIL import Image, ImageFilter, ImageOps
 
 from . import backgrounds
 from .backends import get_backend
@@ -212,6 +212,15 @@ def place(alpha: np.ndarray, product: Image.Image, size: tuple[int, int]):
     as code: the sibling scaled a decor hanging by height alone and a wide
     subject came out at 128% of the canvas, clipped off both edges, silently.
     A saree photographed spread out is exactly that shape.
+
+    **Anchored near the bottom, not centred**, and that is a second bug found
+    on a real photograph rather than inherited: centring left equal empty
+    backdrop above the head and below the feet, which is not how a
+    full-length photograph is ever actually framed and was a real
+    contributor to a composite reading as obviously edited. Whatever
+    vertical slack is left after scaling now goes almost entirely above the
+    subject as headroom, with only a small margin held below -- see
+    `THRESHOLDS.bottom_margin`.
     """
     cw, ch = size
     ys, xs = np.nonzero(alpha > THRESHOLDS.alpha_floor)
@@ -232,13 +241,104 @@ def place(alpha: np.ndarray, product: Image.Image, size: tuple[int, int]):
             (nw, nh), Image.LANCZOS),
         dtype=np.float32,
     ) / 255.0
-    return p_res, a_res, int(cw / 2 - nw / 2), int(ch / 2 - nh / 2)
+
+    ox = int(cw / 2 - nw / 2)
+    bottom_margin = int(ch * THRESHOLDS.bottom_margin)
+    oy = max(ch - nh - bottom_margin, 0)
+    return p_res, a_res, ox, oy
 
 
-def compose(bg: Image.Image, product: Image.Image, alpha: np.ndarray):
-    """Alpha-composite in linear light. Fractional alpha is honoured exactly."""
+def contact_shadow(
+    canvas_size: tuple[int, int],
+    a_res: np.ndarray,
+    ox: int,
+    oy: int,
+    key_dir: tuple[float, float] = (-0.25, -0.45),
+) -> np.ndarray:
+    """A soft shadow where the placed subject's lowest extent meets the frame.
+
+    Read off the subject's **own** contact band -- the bottom slice of its
+    already-placed alpha -- rather than a floor line guessed independently of
+    where `place` happened to put things. The two are built from the same
+    number this way and cannot drift apart.
+
+    Deliberately a soft radial falloff rather than a hard-edged ellipse: a
+    crisp shadow shape reads as painted on, and this only has to say "there
+    is a surface here", not draw one.
+
+    Returns a `(h, w)` field in [0, 1] at canvas resolution, 0 = no shadow.
+    Composited as `canvas *= (1 - opacity * shadow)`.
+    """
+    T = THRESHOLDS
+    cw, ch = canvas_size
+    h, w = a_res.shape
+
+    band = max(int(h * T.contact_shadow_band), 2)
+    strip = a_res[-band:, :]
+    coverage = strip.mean(axis=0)
+    xs = np.nonzero(coverage > T.contact_shadow_min_density)[0]
+    if len(xs) == 0:
+        # Nothing solid enough at the bottom edge to ground -- a product shot
+        # entirely in the air (e.g. jewellery, if this pipeline ever sees
+        # some) has nothing to cast a shadow from, and that is correct.
+        return np.zeros((ch, cw), np.float32)
+
+    x_lo, x_hi = float(xs.min()), float(xs.max())
+    contact_w = max(x_hi - x_lo, w * 0.15)
+    contact_cx = (x_lo + x_hi) / 2 + ox
+    contact_y = oy + h
+
+    yy, xx = np.mgrid[0:ch, 0:cw].astype(np.float32)
+    rx = max(contact_w * 0.55, 4.0)
+    ry = max(rx * 0.22, 3.0)  # flat -- a shadow on a plane seen face-on
+
+    # Pushed *most of the way below* the contact line, not just a hair below
+    # it. Found necessary on a real photograph, not assumed: the contact band
+    # can include an uneven hem or a flared skirt whose lowest solid pixels
+    # sit right at the edge of the placed bounding box, and a shadow centred
+    # there has most of its own peak overwritten by the subject's own opaque
+    # pixels when the product is pasted on top -- what survives is only the
+    # faint tail, invisible at normal viewing size. Offsetting by most of the
+    # shadow's own vertical radius keeps the peak clear of the subject while
+    # still overlapping it enough to read as touching, not detached.
+    off_x = -np.sign(key_dir[0]) * cw * 0.01
+    off_y = ry * 0.85
+
+    dx = (xx - (contact_cx + off_x)) / rx
+    dy = (yy - (contact_y + off_y)) / ry
+    shadow = np.exp(-1.4 * (dx * dx + dy * dy))
+
+    # Blurred relative to the shadow's *own* size, not the canvas as a whole
+    # -- a blur radius comparable to or larger than `ry` was diluting the
+    # peak by more than half before this, which was the other reason the
+    # shadow was reading as invisible rather than merely soft.
+    blur_px = max(int(ry * 0.35), int(min(cw, ch) * T.contact_shadow_blur * 0.4), 2)
+    img = Image.fromarray((np.clip(shadow, 0, 1) * 255).astype(np.uint8), "L")
+    img = img.filter(ImageFilter.GaussianBlur(blur_px))
+    return np.asarray(img, dtype=np.float32) / 255.0
+
+
+def compose(
+    bg: Image.Image,
+    product: Image.Image,
+    alpha: np.ndarray,
+    key_dir: tuple[float, float] = (-0.25, -0.45),
+):
+    """Alpha-composite in linear light. Fractional alpha is honoured exactly.
+
+    The contact shadow is drawn into the canvas **before** the subject is
+    pasted, not after -- pasting afterwards would either paint the shadow
+    over the subject's own feet or need a second mask to avoid it. Drawing
+    it first and letting the paste's own alpha blend over it means the
+    shadow only ever shows where there is no subject, which is exactly the
+    area it exists to describe.
+    """
     p_res, a_res, ox, oy = place(alpha, product, bg.size)
     canvas = srgb_to_linear(_arr(bg))
+
+    shadow = contact_shadow(bg.size, a_res, ox, oy, key_dir)
+    canvas *= (1 - THRESHOLDS.contact_shadow_opacity * shadow)[..., None]
+
     piece = srgb_to_linear(_arr(p_res))
     h, w = a_res.shape
     region = canvas[oy:oy + h, ox:ox + w]
@@ -252,7 +352,8 @@ def compose(bg: Image.Image, product: Image.Image, alpha: np.ndarray):
 @REGISTRY.register("composite")
 def composite(ctx: Context) -> Context:
     assert ctx.background is not None and ctx.product is not None and ctx.alpha is not None
-    out, scene_alpha = compose(ctx.background, ctx.product, ctx.alpha)
+    key_dir = ctx.extra.get("key_direction", (-0.25, -0.45))
+    out, scene_alpha = compose(ctx.background, ctx.product, ctx.alpha, key_dir)
     ctx.composited = out
     ctx.composited_alpha = scene_alpha
     ctx.store.image("composite", "result", out)
@@ -304,12 +405,13 @@ def export(ctx: Context) -> Context:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     stem = ctx.source_path.stem.replace(" ", "-").lower()[:48]
     backdrop = ctx.extra.get("backdrop_used", ctx.cfg.background)
+    key_dir = ctx.extra.get("key_direction", (-0.25, -0.45))
     seed = abs(hash(ctx.job_id)) % 9973
 
     for name in ctx.cfg.presets:
         preset = EXPORT_PRESETS[name]
         canvas = backgrounds.render(backdrop, (preset.width, preset.height), seed=seed)
-        out, _ = compose(canvas, ctx.product, ctx.alpha)
+        out, _ = compose(canvas, ctx.product, ctx.alpha, key_dir)
         path = OUT_DIR / f"{stem}--{name}.jpg"
         out.save(path, "JPEG", quality=preset.quality, subsampling=1, optimize=True)
         ctx.exports[name] = str(path)
