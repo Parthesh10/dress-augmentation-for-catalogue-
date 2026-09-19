@@ -340,6 +340,56 @@ a dynamic action shot will still look dynamic.
   insufficient across more real photographs.
 ---
 
+## 1e. HEIC support that worked in tests and failed in the browser, 2026-09-19
+
+### The gap the earlier fix missed
+
+§1c's fix (`pillow_heif.register_heif_opener()` at `import dressaug` time)
+made every HEIC test pass, including one specifically written to prove
+Gradio's own upload path decodes correctly. It was still wrong: uploading a
+real `.heic` through the app's actual drop zone in a browser was refused
+before that decoder was ever reached, with *"Invalid file type only image/*
+allowed."*
+
+The two checks are different and live in different places. §1c fixed the
+**server-side decode** — can Pillow open the bytes once they arrive.
+This is the **client-side upload gate** — does the browser let the file be
+sent at all. `gr.Image`'s upload widget checks the browser's own MIME sniff
+of the selected file against `image/*`, in compiled frontend JS shipped
+inside the `gradio` package, before any Python code runs. On Windows,
+`.heic` commonly has no OS-level file association, so the browser reports
+an empty MIME type for it, and the check fails silently for every HEIC file
+regardless of what the server can decode.
+
+No automated test in this project runs a real browser, so nothing caught
+this — the exact reason it is recorded here rather than assumed fixed.
+
+### The fix
+
+The upload widget in `build_process_tab` is now `gr.File` with an explicit
+`file_types=["image", ".heic", ".heif"]`, not `gr.Image`. Read
+`gradio_client.utils.is_valid_file` rather than assumed: `gr.File` validates
+**server-side, by filename extension**, unaffected by whatever the browser's
+MIME sniff says. A separate read-only `gr.Image` shows the decoded preview
+once the file has actually arrived — `load_upload()` opens it exactly the
+way `stages.ingest` will (EXIF-transpose, then RGB), so what the operator
+sees before clicking Process is honest about what the pipeline will see.
+
+**3 new tests.** One decodes a real file from `test-images/` when present,
+falling back to a synthetic HEIC (never committed) when it is not, so the
+test means something on a machine with no private photos on it. One pins
+the mechanism directly — asserts the upload widget really is `gr.File`, not
+`gr.Image` — specifically so a future edit that reverts the widget silently
+reintroduces this exact bug without any of the other tests noticing, since
+every other test calls `load_upload`/`process` directly and would keep
+passing regardless of which widget the real app uses.
+
+**Re-verified through the actual app function**, not only through the
+lower-level pipeline: `ui.load_upload()` on a real `.heic` from
+`test-images/`, its result fed into `ui.process()` exactly as a real click
+would, gates checked. Passed clean.
+---
+
 ## 2. What was inherited, and why
 
 | Taken | From | Why |

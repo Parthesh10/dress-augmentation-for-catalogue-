@@ -20,7 +20,7 @@ import traceback
 from pathlib import Path
 
 import gradio as gr
-from PIL import Image
+from PIL import Image, ImageOps
 
 from . import backgrounds, stages  # noqa: F401 -- importing stages registers them
 from .cli import use_utf8_console
@@ -185,10 +185,41 @@ def _preset_choices() -> list[str]:
     return list(_PRESET_LABEL_TO_NAME)
 
 
+def load_upload(file_path: str | None):
+    """Decode whatever was dropped in, for the preview.
+
+    Routed through `gr.File` rather than `gr.Image`'s own drop zone
+    specifically because of `.heic`/`.heif`: `gr.Image`'s upload widget
+    rejects a file client-side if the browser's own MIME sniff of it does
+    not start with "image/", and on Windows a HEIC file's browser-reported
+    MIME type is commonly empty -- there is no OS-level file association for
+    it -- so the file never reaches this process at all, regardless of
+    `dressaug`'s own HEIF support. `gr.File` with an explicit `file_types`
+    list validates by *filename extension* on the server instead, which is
+    unaffected by what the browser thinks the MIME type is.
+
+    Once the file has actually arrived, decoding it is exactly what
+    `stages.ingest` does -- EXIF-transpose, then RGB -- so the preview shown
+    here is honest about what the pipeline will actually see, not a
+    browser-rendered guess.
+    """
+    if file_path is None:
+        return None
+    return ImageOps.exif_transpose(Image.open(file_path)).convert("RGB")
+
+
 def build_process_tab() -> None:
     with gr.Row():
         with gr.Column(scale=2):
-            image = gr.Image(label="Dress photograph", type="pil", height=420)
+            upload = gr.File(
+                label="Dress photograph",
+                file_types=["image", ".heic", ".heif"],
+                height=120,
+            )
+            image = gr.Image(
+                label="Preview", type="pil", height=340, interactive=False,
+            )
+            upload.change(load_upload, [upload], [image])
             with gr.Row():
                 garment = gr.Dropdown(
                     _garment_choices(), value=_GARMENT_LABELS[Garment.PARTY_DRESS],

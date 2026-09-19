@@ -22,6 +22,56 @@ class _NoProgress:
 FIXTURE = pathlib.Path(__file__).resolve().parents[1] / "data" / "fixtures" / "0004-flat.png"
 
 
+def test_load_upload_decodes_a_heic_file():
+    """The fix for a real, reported bug: uploading a .heic through the app's
+    own drop zone was refused client-side with "Invalid file type only
+    image/* allowed" before this file ever reached Python at all -- on
+    Windows, a .heic file's browser-reported MIME type is commonly empty,
+    since there is no OS-level file association for it, and `gr.Image`'s
+    upload widget rejects anything that does not MIME-sniff as "image/*".
+
+    The fix routes the upload through `gr.File` with an explicit
+    `file_types` list instead, which is validated server-side by filename
+    extension -- unaffected by what the browser's MIME sniff says. This test
+    proves the decode side of that path works against a real HEIC file; it
+    cannot exercise the browser's own upload widget from here, which is
+    exactly why the bug was invisible to every earlier automated test.
+    """
+    import tempfile
+
+    real = pathlib.Path(__file__).resolve().parents[1] / "test-images" / "Photos_"
+    heic_files = list(real.glob("*.HEIC")) if real.exists() else []
+    if heic_files:
+        im = ui.load_upload(str(heic_files[0]))
+        assert im is not None and im.mode == "RGB" and min(im.size) > 0
+        return
+
+    # No private photos on this machine -- prove the same path on a
+    # synthetic HEIC instead, so the test still means something in CI.
+    import pillow_heif
+    with tempfile.TemporaryDirectory() as td:
+        path = pathlib.Path(td) / "probe.heic"
+        src = Image.new("RGB", (200, 300), (90, 40, 150))
+        pillow_heif.from_pillow(src).save(str(path), quality=90)
+        im = ui.load_upload(str(path))
+        assert im is not None and im.mode == "RGB" and im.size == (200, 300)
+
+
+def test_load_upload_returns_none_for_no_file():
+    assert ui.load_upload(None) is None
+
+
+def test_the_process_tab_uploads_by_file_not_by_images_own_drop_zone():
+    """Pins the mechanism, not just the outcome: a regression that swapped
+    `gr.File` back for a plain `gr.Image` upload would pass every other test
+    in this file (they all call `load_upload`/`process` directly) while
+    silently reintroducing the exact bug this fix was for."""
+    import inspect
+    src = inspect.getsource(ui.build_process_tab)
+    assert "gr.File(" in src
+    assert ".heic" in src
+
+
 def test_every_garment_has_a_label_and_round_trips():
     for g in Garment:
         label = ui._GARMENT_LABELS[g]

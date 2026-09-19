@@ -33,7 +33,7 @@ so a run can never look more finished than it is.
 ΔE2000 between 0.16 and 0.20 against a 3.0 budget. Roughly 50-75 s per image
 on CPU. Comparison sheet in `work-reports/phase1-2/`.
 
-**41 tests, one command:** `.venv\Scripts\python.exe tests\run_all.py`
+**44 tests, one command:** `.venv\Scripts\python.exe tests\run_all.py`
 
 ---
 
@@ -46,9 +46,15 @@ $env:PYTHONPATH="src"
 
 Opens at `http://127.0.0.1:7860`. Upload a photograph, choose garment type, fabric, a backdrop (by name or by eye), and export sizes; click Process. Recolour is shown, disabled, labelled "coming soon" -- not built yet, and not hidden either.
 
-**Accepts iPhone photos (.heic/.heif) directly**, added 2026-09-19 -- Pillow
-has never shipped a HEIF decoder, so every photo straight off a phone failed
-before this. See [TASK.md §1c](TASK.md).
+**Accepts iPhone photos (.heic/.heif) directly**, added 2026-09-19 in two
+parts. Pillow has never shipped a HEIF decoder, so every photo straight off
+a phone failed on the server -- fixed. Separately, and found only after that
+fix looked complete: the app's own upload widget was rejecting `.heic`
+files in the *browser*, before Python ever saw them, because Windows
+commonly reports no MIME type for the format and the widget's client-side
+check refused anything that did not sniff as `image/*`. Fixed by switching
+to an upload widget that validates by filename extension server-side
+instead. See [TASK.md §1c](TASK.md) and [§1e](TASK.md).
 
 ---
 
