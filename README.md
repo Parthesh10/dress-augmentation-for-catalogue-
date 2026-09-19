@@ -33,7 +33,7 @@ so a run can never look more finished than it is.
 ΔE2000 between 0.16 and 0.20 against a 3.0 budget. Roughly 50-75 s per image
 on CPU. Comparison sheet in `work-reports/phase1-2/`.
 
-**51 tests, one command:** `.venv\Scripts\python.exe tests\run_all.py`
+**56 tests, one command:** `.venv\Scripts\python.exe tests\run_all.py`
 
 ---
 
@@ -125,6 +125,27 @@ shop's own photographs** — [TASK.md §5](TASK.md) says what a useful first set
 looks like.
 
 ---
+
+## Lighting harmonisation, no new dependency, 2026-09-19
+
+Asked to check for a free connector to push realism further before
+building more; checked Higgsfield (still 0 credits) and confirmed the
+machine's GPU (a real GTX 1650, previously unused -- the shared matting
+interpreter is CPU-only torch) can't currently run a heavier open-source
+harmonization/relighting model like Harmonizer or IC-Light without a ~2.5GB
+CUDA upgrade to an interpreter shared with the sibling project -- a bigger
+change than today's task needed.
+
+Built the deterministic version instead: `harmonize_gain()` samples the
+backdrop's own colour right where the subject is about to stand, and
+`compose()` nudges the subject toward it in linear light, bounded to a
+small range and normalising out the backdrop's own brightness (so it
+doesn't mistake the cove floor's intentional brightness step for a colour
+cast). No new gate needed -- it's checked against the `colour_fidelity`
+dE2000 budget that already existed. Measured on four real photographs:
+dE2000 moved from near-zero to 0.24-2.12, comfortably under the 3.0 budget,
+proof the effect is real without being enough to change the garment's true
+colour. Full account in [TASK.md §1h](TASK.md).
 
 ## Studio backdrops with a floor, 2026-09-19
 

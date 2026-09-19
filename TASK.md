@@ -529,6 +529,114 @@ less of the floor than a calmer, more centred pose does, simply because
 there is less backdrop exposed around the subject to show it on.
 ---
 
+## 1h. Checked for a free boost first; found none; built lighting harmonisation instead, 2026-09-19
+
+### What was checked, and why it came up empty
+
+Asked directly to check for free connectors before building further, and to
+find open-source models if none existed. Checked three things, in order:
+
+1. **Higgsfield's balance** (the only connector in this environment that
+   does image work at all): still `{"credits": 0, "subscription_plan_type":
+   "free"}`, same reading as every earlier check this session. Nothing to
+   spend.
+2. **Whether this machine could even run a heavier open-source model.** It
+   turns out there *is* a real GPU here -- a GTX 1650, 4GB -- which was not
+   obvious from the project's own history, since every earlier decision
+   (§1c's HEIC work, the matting backend) was made assuming CPU only. But
+   the torch interpreter this project already shares with the sibling
+   jewellery project for BiRefNet matting (`Boutique Business/.venv-birefnet`)
+   is a CPU-only build (`torch 2.13.0+cpu`) -- confirmed by asking it
+   directly, not assumed. So the GPU is real but currently unusable without
+   installing a ~2.5 GB CUDA-enabled torch build into an interpreter shared
+   with another project's already-verified pipeline. That is a real option,
+   not taken here: it is bigger than this task, it touches the sibling
+   project's own working setup, and nothing about today's request needed it.
+3. **Named open-source options that exist for this specific problem**
+   ("image harmonization" is the actual computer-vision term for making a
+   composited foreground read as if it were lit by the same light as its
+   new background) -- `Harmonizer` (ECCV 2022) and `IC-Light` (relighting,
+   SD1.5-based) are the two real, well-known, free ones. Both were set
+   aside for now: both need the CUDA upgrade above to run at a usable speed,
+   both are learned models that would touch the actual photographed
+   product's pixels rather than only the backdrop around it, and neither
+   was actually necessary -- the gap they would close turned out to be
+   closeable deterministically, for the same reason §1g's cove floor was.
+
+### What was built instead, with no new dependency
+
+The real gap, once the backdrop had a floor (§1g) and the subject had a
+shadow (§1d): **the subject's own photographed lighting is never
+reconciled with the backdrop's.** A garment shot in cool daylight, pasted
+onto a warm `champagne_silk` studio backdrop, still looks pasted even with
+a perfect cutout and a correct floor, because the two don't share a light
+source -- which is exactly the cue that reads as "edited" rather than
+"captured", independent of geometry.
+
+`harmonize_gain()` (`stages.py`) computes a small per-channel colour nudge
+from the backdrop's *own* pixels right around where the subject is about to
+stand -- not the whole frame, which would mix in wall and floor tones that
+have nothing to do with the subject's own lighting. The sample's luminance
+is normalised out before comparing, specifically so it does not mistake
+§1g's cove floor -- deliberately brighter than its wall by design -- for a
+colour cast to lend. `compose()` multiplies that gain into the subject in
+linear light before pasting, alongside the existing shadow and placement
+work, not instead of them.
+
+**Bounded twice, and checked against a gate that already existed rather
+than a new one invented for this.** `harmonize_strength` (0.16) sets how
+much of the sampled cast is lent at all; `harmonize_gain_min/max`
+(0.92-1.08) hard-clamps the result regardless of how saturated the backdrop
+is. The actual backstop is the pipeline's own `colour_fidelity` gate --
+already measuring dE2000 between the original photograph and the final
+export, already budgeted at 3.0 because (`color.py`'s own words) "a gown
+that ships a different red than the listing showed is a return." This
+change adds no new safety mechanism; it just has to stay comfortably inside
+the one that was already load-bearing.
+
+**Measured, not assumed, to stay inside it.** Re-rendered the same three
+real photographs from §1g, plus the fixture the UI's own end-to-end test
+runs on every suite run:
+
+| Photo | Backdrop | dE2000 before | dE2000 after | Budget |
+|---|---|---:|---:|---:|
+| `06-sarees-red` (dark saree, real Myntra photo) | `midnight_velvet` | 0.46 | 1.78 | 3.0 |
+| `IMG_8364` (dynamic lehenga spin) | `champagne_silk` | 0.15 | 1.35 | 3.0 |
+| `IMG_8300` (calm Garba pose) | `studio_pearl` | 0.12 | 0.24 | 3.0 |
+| `0004-flat` (UI test fixture) | `champagne_silk` | -- | 2.12 | 3.0 |
+
+The rise from near-zero to a real, non-trivial number is the proof the
+harmonisation is actually doing something rather than being a no-op; the
+largest of the four (2.12, a flat-lay garment whose own tone differed most
+from the sampled backdrop patch) still leaves 29% of the budget unused. All
+four gates still read `✓` (pass).
+
+**5 new tests**: the gain is neutral on a grey backdrop; it leans warm
+toward a warm backdrop and not the reverse; it stays inside its bounds even
+against an adversarial, maximally saturated sample; it does not mistake the
+cove floor's brightness for a colour cast; and `compose()` actually applies
+it to the pasted subject rather than computing and discarding it (a
+synthetic grey-on-orange case, checked numerically). The existing
+real-pipeline end-to-end test in `test_ui.py` now asserts `colour_fidelity`
+reads `[ok]`, not merely that the word appears in the report -- a version
+that silently pushed the gate past budget would have passed the old
+assertion and fails this one.
+
+### What this does and does not claim
+
+It is a deliberately small, deterministic nudge -- a colour-grading pass, not
+a relighting model -- and it is meant to be felt rather than seen: on the
+photographs above it moves the subject's own measured colour by roughly
+half a dE2000 to under two, well below the threshold a viewer would
+consciously register as "the garment changed colour," while still closing
+part of the gap between "photographed elsewhere" and "photographed here."
+It does not simulate directional light, specular highlights, or shadow-side
+falloff on the subject the way a real relighting model would -- that is
+what `Harmonizer` or `IC-Light` would add, and both remain available
+options if the CUDA upgrade is ever worth taking on. This is the free,
+zero-new-dependency step that was actually available today.
+---
+
 ## 2. What was inherited, and why
 
 | Taken | From | Why |

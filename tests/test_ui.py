@@ -165,6 +165,13 @@ def test_process_runs_the_real_pipeline_end_to_end():
     assert gallery is not None and len(gallery) == 2
     assert "colour_fidelity" in report
     assert "cutout_softness" in report
+    # The lighting-harmonisation pass (2026-09-19) nudges the subject's own
+    # colour toward the backdrop's -- this is the gate that proves it never
+    # nudges far enough to fail the promise "the garment ships the colour it
+    # was listed in". Checked against the pass mark specifically (see
+    # ui.process's "✓" / "✗ FAILED"), since a failing gate still contains
+    # the substring "colour_fidelity".
+    assert "✓  colour_fidelity" in report, report
     # And the export actually landed under the real filename, not "source".
     from dressaug.config import OUT_DIR
     expected = OUT_DIR / f"{ui._export_stem(str(FIXTURE))}--portrait_2x3.jpg"

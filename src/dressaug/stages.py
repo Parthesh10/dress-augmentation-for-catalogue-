@@ -318,6 +318,44 @@ def contact_shadow(
     return np.asarray(img, dtype=np.float32) / 255.0
 
 
+def harmonize_gain(bg_srgb: np.ndarray, ox: int, oy: int, w: int, h: int) -> np.ndarray:
+    """The per-channel linear-light gain that lends the subject a sliver of
+    the backdrop's own ambient colour, so it reads as lit by the same room
+    rather than lit somewhere else and pasted in.
+
+    Sampled from the backdrop pixels right around where the subject is about
+    to stand -- not the whole frame, which would mix in wall and floor tones
+    the subject's own lighting has no reason to share. Luminance is
+    normalised out of the sample before comparing: a `cove` backdrop's floor
+    is *brighter* than its wall by design (see `backgrounds._cove`), and
+    that brightness step describes the backdrop's own geometry, not a colour
+    the subject should be tinted toward.
+
+    Bounded twice over -- once by `harmonize_strength`, which sets how much
+    of the sampled cast is actually lent, and again by an absolute
+    `harmonize_gain_min/max` clamp -- because this runs before the
+    `colour_fidelity` gate, not instead of it, and the gate is the actual
+    backstop against drifting the garment's true colour.
+    """
+    T = THRESHOLDS
+    bh, bw = bg_srgb.shape[:2]
+    cx = ox + w // 2
+    radius = max(w // 2, 8)
+    x0, x1 = max(cx - radius, 0), min(cx + radius, bw)
+    y0, y1 = max(oy, 0), min(oy + h, bh)
+    if x1 <= x0 or y1 <= y0:
+        return np.ones(3, np.float32)
+
+    patch = srgb_to_linear(bg_srgb[y0:y1, x0:x1]).reshape(-1, 3).mean(axis=0)
+    luma = float(patch.mean())
+    if luma < 1e-6:
+        return np.ones(3, np.float32)
+    cast = patch / luma  # colour only, brightness normalised out
+
+    gain = 1.0 + T.harmonize_strength * (cast - 1.0)
+    return np.clip(gain, T.harmonize_gain_min, T.harmonize_gain_max).astype(np.float32)
+
+
 def compose(
     bg: Image.Image,
     product: Image.Image,
@@ -334,13 +372,15 @@ def compose(
     area it exists to describe.
     """
     p_res, a_res, ox, oy = place(alpha, product, bg.size)
-    canvas = srgb_to_linear(_arr(bg))
+    bg_srgb = _arr(bg)
+    canvas = srgb_to_linear(bg_srgb)
 
     shadow = contact_shadow(bg.size, a_res, ox, oy, key_dir)
     canvas *= (1 - THRESHOLDS.contact_shadow_opacity * shadow)[..., None]
 
-    piece = srgb_to_linear(_arr(p_res))
     h, w = a_res.shape
+    gain = harmonize_gain(bg_srgb, ox, oy, w, h)
+    piece = srgb_to_linear(_arr(p_res)) * gain[None, None, :]
     region = canvas[oy:oy + h, ox:ox + w]
     a = a_res[..., None]
     canvas[oy:oy + h, ox:ox + w] = piece * a + region * (1 - a)

@@ -273,6 +273,70 @@ def test_compose_and_export_thread_the_backdrops_own_key_direction():
     assert src.count('ctx.extra.get("key_direction"') == 2
 
 
+# --------------------------------------------------------------- harmonize
+
+
+def test_harmonize_gain_is_neutral_on_a_grey_backdrop():
+    """No colour cast to lend -- a grey backdrop's ambient light has no hue,
+    so the subject should come back untouched."""
+    bg = np.full((300, 400, 3), 0.6, np.float32)
+    gain = stages.harmonize_gain(bg, ox=100, oy=50, w=100, h=200)
+    assert np.allclose(gain, 1.0, atol=1e-4), gain
+
+
+def test_harmonize_gain_leans_toward_a_warm_backdrop():
+    """A warm (amber) backdrop patch should nudge red up and blue down for
+    the subject standing in front of it -- not neutral, and not reversed."""
+    bg = np.full((300, 400, 3), 0.3, np.float32)
+    bg[:, 100:300, 0] = 0.75  # warm patch: R >> G > B
+    bg[:, 100:300, 1] = 0.55
+    bg[:, 100:300, 2] = 0.35
+    gain = stages.harmonize_gain(bg, ox=100, oy=0, w=200, h=300)
+    assert gain[0] > 1.0 > gain[2], f"expected R up / B down, got {gain}"
+
+
+def test_harmonize_gain_is_bounded_regardless_of_backdrop_saturation():
+    """However saturated the sampled backdrop patch, the gain can never
+    leave the configured [min, max] band -- the actual guarantee against
+    measurably distorting the garment's true colour, independent of
+    `harmonize_strength`."""
+    bg = np.zeros((200, 200, 3), np.float32)
+    bg[..., 0] = 1.0  # pure, maximally saturated red -- an adversarial case
+    gain = stages.harmonize_gain(bg, ox=0, oy=0, w=200, h=200)
+    assert gain.min() >= THRESHOLDS.harmonize_gain_min - 1e-6
+    assert gain.max() <= THRESHOLDS.harmonize_gain_max + 1e-6
+
+
+def test_harmonize_ignores_the_cove_floors_own_brightness_step():
+    """`_cove`'s floor is deliberately brighter than its wall (see
+    backgrounds.py's §1g fix) -- that is the backdrop's own geometry, not a
+    colour cast, and `harmonize_gain` normalises luminance out of its sample
+    before comparing so it must not mistake "the floor is lit" for "the room
+    is warm or cool"."""
+    bg = np.full((300, 400, 3), 0.3, np.float32)  # neutral grey wall
+    bg[200:, :, :] = 0.6  # much brighter floor, still neutral grey
+    gain = stages.harmonize_gain(bg, ox=100, oy=180, w=200, h=100)
+    assert np.allclose(gain, 1.0, atol=1e-4), gain
+
+
+def test_compose_actually_applies_the_harmonize_gain_to_the_pasted_subject():
+    """Not just that `harmonize_gain` computes something reasonable in
+    isolation -- that `compose` actually multiplies it into the pasted
+    product rather than computing and discarding it. A neutral grey subject
+    pasted onto a strongly warm backdrop should come back visibly warmer
+    than it went in."""
+    a_res = _standing_alpha()
+    product = Image.new("RGB", a_res.shape[::-1], (128, 128, 128))
+    bg = Image.new("RGB", (400, 600), (230, 140, 60))  # strongly warm/orange
+    out, scene_alpha = stages.compose(bg, product, a_res)
+    out_arr = np.asarray(out, np.float32)
+    mask = scene_alpha > 0.95
+    assert mask.sum() > 100
+    mean_rgb = out_arr[mask].mean(axis=0)
+    assert mean_rgb[0] > 128 + 2, f"expected red to lift on a warm backdrop, got {mean_rgb}"
+    assert mean_rgb[2] < 128 - 2, f"expected blue to drop on a warm backdrop, got {mean_rgb}"
+
+
 # ---------------------------------------------------------------- placement
 
 

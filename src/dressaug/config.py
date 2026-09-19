@@ -226,6 +226,21 @@ class Thresholds:
     #: too.
     bottom_margin: float = 0.05
 
+    # ---- lighting harmonisation, added 2026-09-19 ---------------------------
+    #: How much of the backdrop's own ambient colour cast to lend the subject,
+    #: 0 = untouched, 1 = fully matched. Deliberately small: this is meant to
+    #: read as "the same lights were on the subject and the backdrop", not to
+    #: recolour the garment. Bounded further by `harmonize_gain_min/max` below
+    #: and, in the end, by the `colour_fidelity` gate itself -- this setting
+    #: only has to be small enough that gate stays comfortably clear of its
+    #: budget on real photographs, which it was measured to do.
+    harmonize_strength: float = 0.16
+    #: Hard floor/ceiling on the per-channel gain regardless of strength, so a
+    #: strongly saturated backdrop (midnight_velvet, wine_drape) can't swing
+    #: the subject further than a believable "same room" adjustment.
+    harmonize_gain_min: float = 0.92
+    harmonize_gain_max: float = 1.08
+
     # ---- recolouring (phase 3 and 4) ---------------------------------------
     #: A recolour must not move lightness structure, only hue and chroma.
     #: This is the whole of phase 3's "no change in design": the folds, the
