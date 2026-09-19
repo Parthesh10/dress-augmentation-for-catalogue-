@@ -7,5 +7,9 @@ numpy>=1.26
 # pipeline.
 pyarrow>=15.0
 
+# HEIC/HEIF decoding -- iPhone photos default to this format since iOS 11,
+# and Pillow has never shipped a decoder for it (patent licensing).
+pillow-heif>=0.18
+
 # The operator UI.
 gradio>=6.0

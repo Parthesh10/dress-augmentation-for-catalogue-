@@ -17,6 +17,11 @@ data/ethnic-fixtures/
 # sibling project: source photography is not pushed to a remote.
 data/incoming/
 
+# The operator's own real garment photographs, dropped in for local
+# testing (includes iPhone HEIC originals). Private stock photography --
+# never committed, never published, same discipline as data/incoming/.
+test-images/
+
 # Batch logs and comparison sheets. Regenerable; what matters is transcribed
 # into TASK.md.
 work-reports/
