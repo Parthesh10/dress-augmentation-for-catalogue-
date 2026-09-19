@@ -390,6 +390,34 @@ lower-level pipeline: `ui.load_upload()` on a real `.heic` from
 would, gates checked. Passed clean.
 ---
 
+## 1f. Every export was named "source", 2026-09-19
+
+Asked directly: "where is output image? file location?" — the honest answer
+exposed a real bug rather than just a directory path. Every export from the
+app landed at `output/source--<preset>.jpg`, regardless of what was
+uploaded, because `process()` always wrote the decoded image to a hardcoded
+`source.png` inside its temp directory and never looked at the original
+filename. **A second photograph silently overwrote the first's export.**
+
+The fix did not need a filename invented anywhere: `gr.File`'s upload route
+already sanitises and preserves the original filename as the basename of its
+own server-side cache entry (confirmed by reading
+`gradio/route_utils.py::upload_fn` rather than assumed) — `process()` was
+simply discarding information Gradio had already given it. `_export_stem()`
+reads it back; `process()` now takes the upload's own path as a second
+argument (`run_btn.click`'s `inputs` gained `upload` alongside `image`) and
+writes the temp file under that name instead of a fixed one, so `export()`'s
+`ctx.source_path.stem` — and therefore the actual filename on disk — reflects
+what was uploaded.
+
+**4 new tests**, one of them extending the existing slow real-pipeline test
+rather than adding a separate one: it now asserts the export file actually
+exists at the *expected named path* under `OUT_DIR`, not merely that some
+gallery of the right length came back. A regression that silently reverted
+to `source.png` would have passed the old version of that test and failed
+this one.
+---
+
 ## 2. What was inherited, and why
 
 | Taken | From | Why |

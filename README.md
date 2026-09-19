@@ -33,7 +33,7 @@ so a run can never look more finished than it is.
 ΔE2000 between 0.16 and 0.20 against a 3.0 budget. Roughly 50-75 s per image
 on CPU. Comparison sheet in `work-reports/phase1-2/`.
 
-**44 tests, one command:** `.venv\Scripts\python.exe tests\run_all.py`
+**45 tests, one command:** `.venv\Scripts\python.exe tests\run_all.py`
 
 ---
 
@@ -45,6 +45,11 @@ $env:PYTHONPATH="src"
 ```
 
 Opens at `http://127.0.0.1:7860`. Upload a photograph, choose garment type, fabric, a backdrop (by name or by eye), and export sizes; click Process. Recolour is shown, disabled, labelled "coming soon" -- not built yet, and not hidden either.
+
+**Exports land in `output/`, named after the file you uploaded** -- fixed
+2026-09-19; every export used to be named `source--<preset>.jpg` regardless
+of what was uploaded, so a second photograph silently overwrote the first's
+result. See [TASK.md §1f](TASK.md).
 
 **Accepts iPhone photos (.heic/.heif) directly**, added 2026-09-19 in two
 parts. Pillow has never shipped a HEIF decoder, so every photo straight off

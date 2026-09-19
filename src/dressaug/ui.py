@@ -81,8 +81,26 @@ _BACKDROP_THUMBS = _backdrop_gallery()
 _BACKDROP_NAMES = [n for _, n in _BACKDROP_THUMBS]
 
 
+def _export_stem(upload_path: str | None) -> str:
+    """A filesystem-safe name derived from what was actually uploaded.
+
+    `upload_path` is `gr.File`'s own cached copy, and Gradio's upload route
+    already sanitises and preserves the original filename as that cache
+    entry's basename (`gradio/route_utils.py::upload_fn`) -- so this needs
+    no filename of its own, only to read the one already there rather than
+    discard it. Before this, every export was named `source--<preset>.jpg`
+    regardless of what was uploaded, and a second photograph silently
+    overwrote the first.
+    """
+    if not upload_path:
+        return "dress"
+    stem = Path(upload_path).stem.replace(" ", "-").lower()[:48]
+    return stem or "dress"
+
+
 def process(
     image,
+    upload_path,
     garment_label: str,
     fabric_label: str,
     backdrop_name: str,
@@ -105,7 +123,7 @@ def process(
     yield None, "starting…", ""
 
     with tempfile.TemporaryDirectory() as td:
-        src_path = Path(td) / "source.png"
+        src_path = Path(td) / f"{_export_stem(upload_path)}.png"
         image.save(src_path)
 
         cfg = JobConfig(
@@ -269,7 +287,7 @@ def build_process_tab() -> None:
 
     run_btn.click(
         process,
-        inputs=[image, garment, fabric, backdrop, presets],
+        inputs=[image, upload, garment, fabric, backdrop, presets],
         outputs=[output, report, warnings],
     )
 

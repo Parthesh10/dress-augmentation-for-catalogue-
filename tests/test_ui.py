@@ -111,7 +111,7 @@ def test_the_app_builds_without_error():
 
 def test_missing_image_is_refused_without_running_the_pipeline():
     result = list(ui.process(
-        None, "Gown", ui._AUTO_FABRIC, "studio_ivory",
+        None, None, "Gown", ui._AUTO_FABRIC, "studio_ivory",
         ui._preset_choices()[:1], progress=_NoProgress(),
     ))[-1]
     assert result[0] is None
@@ -121,7 +121,7 @@ def test_missing_image_is_refused_without_running_the_pipeline():
 def test_missing_backdrop_is_refused():
     img = Image.new("RGB", (80, 80), (180, 140, 140))
     result = list(ui.process(
-        img, "Gown", ui._AUTO_FABRIC, "",
+        img, None, "Gown", ui._AUTO_FABRIC, "",
         ui._preset_choices()[:1], progress=_NoProgress(),
     ))[-1]
     assert result[0] is None
@@ -131,11 +131,22 @@ def test_missing_backdrop_is_refused():
 def test_missing_presets_is_refused():
     img = Image.new("RGB", (80, 80), (180, 140, 140))
     result = list(ui.process(
-        img, "Gown", ui._AUTO_FABRIC, "studio_ivory", [],
+        img, None, "Gown", ui._AUTO_FABRIC, "studio_ivory", [],
         progress=_NoProgress(),
     ))[-1]
     assert result[0] is None
     assert "export size" in result[1].lower()
+
+
+def test_export_stem_uses_the_original_filename_not_a_placeholder():
+    """The fix for a real report: every export used to be named
+    `source--<preset>.jpg` regardless of what was uploaded, because
+    `process()` discarded the original filename and always wrote to a
+    hardcoded temp path. A second photograph silently overwrote the first."""
+    assert ui._export_stem("/tmp/abc123/IMG_8364.HEIC") == "img_8364"
+    assert ui._export_stem("/tmp/abc123/My Lehenga Photo.jpg") == "my-lehenga-photo"
+    assert ui._export_stem(None) == "dress"
+    assert ui._export_stem("") == "dress"
 
 
 def test_process_runs_the_real_pipeline_end_to_end():
@@ -148,12 +159,16 @@ def test_process_runs_the_real_pipeline_end_to_end():
         return
     img = Image.open(FIXTURE).convert("RGB")
     gallery, report, warnings = list(ui.process(
-        img, "Gown", ui._AUTO_FABRIC, "champagne_silk",
+        img, str(FIXTURE), "Gown", ui._AUTO_FABRIC, "champagne_silk",
         ui._preset_choices()[:2], progress=_NoProgress(),
     ))[-1]
     assert gallery is not None and len(gallery) == 2
     assert "colour_fidelity" in report
     assert "cutout_softness" in report
+    # And the export actually landed under the real filename, not "source".
+    from dressaug.config import OUT_DIR
+    expected = OUT_DIR / f"{ui._export_stem(str(FIXTURE))}--portrait_2x3.jpg"
+    assert expected.exists(), f"expected export at {expected}"
 
 
 if __name__ == "__main__":
