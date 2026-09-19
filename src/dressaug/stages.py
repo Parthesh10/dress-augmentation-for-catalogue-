@@ -76,6 +76,53 @@ def ingest(ctx: Context) -> Context:
 # ------------------------------------------------- 2. matte  (PHASE 1)
 
 
+def decontaminate(rgb: np.ndarray, alpha: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Recover the garment's true colour at semi-transparent edge pixels.
+
+    **This is the fix for the pale halo** -- the known defect recorded in
+    TASK.md since 2026-09-11. A matte cut from a white studio background
+    carries a trace of that white in every semi-transparent edge pixel
+    (anti-aliased hems, wisps of hair-fine trim, the soft border of a net
+    skirt). Composite that pixel onto midnight velvet and the white bleeds
+    through as a pale fringe, regardless of how good the alpha itself is.
+
+    The fix, ported from the sibling jewellery project's `matte` stage:
+    estimate the old background's colour from the pixels the matte calls
+    empty, then invert the compositing equation
+
+        observed = true_colour * a + old_bg * (1 - a)
+        true_colour = (observed - old_bg * (1 - a)) / a
+
+    **This is not only correct for opaque garments with soft edges -- it is
+    also correct for genuinely sheer fabric**, and that is worth spelling
+    out because it looks at first like it should only apply to one case.
+    A chiffon or net pixel is not an edge artefact; the fabric really is
+    partly see-through there, and the physical thing the camera recorded
+    really is `garment_tint * a + whatever_was_behind_it * (1 - a)`. The
+    inversion above recovers `garment_tint` -- the colour of the fabric
+    itself -- which is exactly what standard alpha compositing needs to
+    place that same sheer fabric correctly over a *different* backdrop.
+    Skipping decontamination on sheer fabric would have been the actual bug;
+    it is not an exception to the fix, it is the case that needs it most.
+
+    Alpha is returned unchanged. Only colour moves.
+    """
+    a = alpha[..., None]
+    bg_mask = alpha < 0.05
+    if bg_mask.sum() > 64:
+        bg_colour = rgb[bg_mask].mean(axis=0)
+    else:
+        bg_colour = np.array([1.0, 1.0, 1.0], dtype=np.float32)  # studio white default
+
+    safe = np.maximum(a, 0.12)
+    recovered = np.clip((rgb - bg_colour * (1 - a)) / safe, 0, 1)
+    # Below the matting stage's own floor there is no product signal to
+    # recover at all -- leave those pixels as observed rather than manufacture
+    # a colour from noise.
+    out = np.where(a > THRESHOLDS.alpha_floor, recovered, rgb)
+    return out, bg_colour
+
+
 def partial_alpha_fraction(alpha: np.ndarray) -> float:
     """How much of the matte is genuinely fractional rather than 0 or 1.
 
@@ -122,8 +169,14 @@ def matte(ctx: Context) -> Context:
                 "net or chiffon was dropped rather than matted. Check the cutout before "
                 "trusting it"
             )
+    rgb = _arr(ctx.source)
+    decontaminated, bg_colour = decontaminate(rgb, alpha)
+    ctx.extra["old_background_rgb"] = [round(float(v), 4) for v in bg_colour]
+
     ctx.alpha = alpha
+    ctx.product = _img(decontaminated)
     ctx.store.mask("matte", "alpha", alpha)
+    ctx.store.image("matte", "product-decontaminated", ctx.product)
     return ctx
 
 

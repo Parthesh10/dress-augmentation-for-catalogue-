@@ -69,7 +69,8 @@ Fixed by building the map at import time instead of at UI-construction time.
 `test_the_preset_label_map_is_populated_without_building_the_ui` pins it.
 
 **10 new tests**, one of them running the real pipeline end-to-end through the
-UI's own code path rather than through a mock. 25 tests total.
+UI's own code path rather than through a mock. 25 tests total (later 29, once
+the halo fix below added its own).
 
 ---
 
@@ -131,19 +132,46 @@ All gates passed. Comparison sheet: `work-reports/phase1-2/`.
 
 Roughly 50-75 s per image on CPU.
 
+**Re-verified 2026-09-19** after the decontamination fix, same garment, same
+four backdrops -- colour fidelity held (dE 0.29-0.38, still well inside the
+3.0 budget) while the edge halo dropped substantially. Comparison sheet:
+`work-reports/phase1-2-after-fix/`; zoomed before/after:
+`work-reports/halo-zoom-compare.jpg`.
+
 ---
 
 ## 5. Open, in priority order
 
-### P0 — a real defect, visible in the output
+### P0 — a real defect, fixed 2026-09-19
 
-- [ ] **Edge decontamination is missing.** On the dark backdrops there is a
-      pale halo around the garment: the semi-transparent edge pixels still
-      carry the white studio background they were cut from, and compositing
-      them onto midnight blue drags that white through. The sibling solves
-      this in its `matte` stage and the fix was **not** ported. This is the
-      single most visible flaw in phase 1 today and it gets worse the darker
-      the backdrop, which is exactly where evening gowns want to sit.
+- [x] **Edge decontamination, ported from the sibling.** `stages.decontaminate`
+      estimates the old background colour from pixels the matte calls empty,
+      then inverts the compositing equation at every semi-transparent pixel
+      to recover the garment's true colour before it is placed on a new
+      backdrop. `matte` now sets `ctx.product` from this rather than from the
+      raw source, so both the preview composite and every exported file get it.
+
+      **This is correct for sheer fabric too, and that took working through
+      rather than assuming.** A net or chiffon pixel is not an edge artefact
+      to be cleaned up -- the fabric really is partly see-through there. But
+      the physics is the same equation (`observed = true_colour*a +
+      background*(1-a)`), so recovering `true_colour` is exactly what correct
+      alpha compositing needs regardless of *why* a pixel is fractional.
+      Skipping sheer fabric would have been the bug, not an exception to it.
+
+      **Measured, not just eyeballed:** a synthetic edge reproducing the halo
+      showed a 45%+ reduction in colour error against a dark backdrop
+      (`tests/test_pipeline.py::test_decontamination_makes_a_dark_backdrop_composite_closer_to_true_colour`),
+      and a real photograph on `midnight_velvet` shows the same thing zoomed
+      in: a visibly tighter, darker edge where the pale fringe was.
+
+      **Reduced, not eliminated, and that is by design rather than an
+      unfinished job.** `decontaminate` floors alpha at 0.12 before dividing,
+      on purpose -- dividing by a near-zero alpha would amplify sensor noise
+      into wild colours at the very tip of the rim. Those lowest-alpha pixels
+      keep a small residual bias. If a future photograph still shows a visible
+      fringe on a very dark backdrop, this floor is the first thing to
+      revisit, not a sign the fix did not work.
 
 ### P1 — the dataset problem, stated honestly
 

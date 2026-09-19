@@ -102,14 +102,18 @@ project forward. [TASK.md §5](TASK.md) says what a useful first set looks like.
 
 ---
 
-## Known defect
+## Halo fix, 2026-09-19
 
-On a dark backdrop there is a pale halo around the garment: the
-semi-transparent edge pixels still carry the white studio background they were
-cut from. The sibling solves this with edge decontamination in its `matte`
-stage and the fix has not been ported yet. It is the most visible flaw in
-phase 1 and it is worst exactly where evening gowns want to sit — see
-[TASK.md §5](TASK.md).
+The pale edge that used to show around a garment on a dark backdrop is fixed.
+Semi-transparent edge pixels carried a trace of the white studio background
+they were cut from; `matte` now recovers each pixel's true colour before it
+is placed on a new backdrop, the same technique ported from the sibling
+project. Correct for sheer fabric as well as ordinary soft edges — see
+[TASK.md §5](TASK.md) for why that is not a special case.
+
+Reduced substantially, not to zero, by design: the very lowest-alpha rim
+pixels keep a small residual bias on purpose, so dividing by a near-zero
+alpha does not amplify noise into a wild colour.
 
 ---
 

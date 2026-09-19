@@ -11,6 +11,7 @@ import numpy as np
 from PIL import Image
 
 from dressaug import backgrounds, stages
+from dressaug.stages import decontaminate
 from dressaug.config import (
     SEMI_TRANSPARENT, THRESHOLDS, Fabric, Garment, Graph, JobConfig, Phase,
 )
@@ -91,6 +92,114 @@ def test_alpha_solid_is_below_the_siblings_cutoff():
     the lining and the seams, which are the least representative pixels in
     the photograph."""
     assert THRESHOLDS.alpha_solid < 0.98
+
+
+# ---------------------------------------------------------------- decontamination
+# The halo fix, 2026-09-19. TASK.md tracked this as an open P0 defect: on a
+# dark backdrop the garment showed a pale fringe, because semi-transparent
+# edge pixels still carried the white studio background they were cut from.
+
+
+def _white_bled_pixel(true_colour, alpha, white=(1.0, 1.0, 1.0)):
+    """What a camera actually records at a semi-transparent edge over a
+    white studio background -- the thing decontaminate() has to undo."""
+    import numpy as np
+    tc = np.array(true_colour, np.float32)
+    w = np.array(white, np.float32)
+    return tc * alpha + w * (1 - alpha)
+
+
+def test_a_solid_interior_pixel_is_left_completely_unchanged():
+    """At alpha=1 there is nothing to decontaminate -- the formula must be
+    the identity there, or a garment's own solid colour would shift."""
+    rgb = np.full((10, 10, 3), 0.3, np.float32)
+    alpha = np.ones((10, 10), np.float32)
+    out, _ = decontaminate(rgb, alpha)
+    assert np.allclose(out, rgb, atol=1e-5)
+
+
+def test_a_semi_transparent_edge_pixel_recovers_its_true_colour():
+    """The core claim: given a pixel that a real camera would have recorded
+    over a white background, decontaminate() gets back close to the colour
+    the fabric actually is."""
+    true_colour = (0.15, 0.05, 0.35)   # a deep purple
+    alpha_val = 0.4
+    observed = _white_bled_pixel(true_colour, alpha_val)
+
+    rgb = np.tile(observed, (20, 20, 1)).astype(np.float32)
+    alpha = np.full((20, 20), alpha_val, np.float32)
+    # a patch of declared-empty background so the estimator has something
+    # to measure the white from
+    rgb[:5, :5] = (1.0, 1.0, 1.0)
+    alpha[:5, :5] = 0.0
+
+    out, bg = decontaminate(rgb, alpha)
+    recovered = out[10, 10]
+    assert np.allclose(bg, [1.0, 1.0, 1.0], atol=0.05), bg
+    for got, want in zip(recovered, true_colour):
+        assert abs(got - want) < 0.08, (recovered, true_colour)
+
+
+def test_decontamination_makes_a_dark_backdrop_composite_closer_to_true_colour():
+    """The actual halo, reproduced and shown fixed end to end: matte, then
+    composite onto something dark, with and without decontamination."""
+    true_colour = np.array([0.12, 0.10, 0.30], np.float32)  # deep blue-purple
+    size = 120
+    alpha = np.zeros((size, size), np.float32)
+    alpha[20:100, 20:100] = 1.0
+    # a soft, semi-transparent border -- the thing that carries the halo
+    for i in range(6):
+        v = (i + 1) / 7
+        alpha[20 - i - 1, 20 - i - 1:100 + i + 1] = v
+        alpha[100 + i, 20 - i - 1:100 + i + 1] = v
+        alpha[20 - i - 1:100 + i + 1, 20 - i - 1] = v
+        alpha[20 - i - 1:100 + i + 1, 100 + i] = v
+
+    rgb = np.ones((size, size, 3), np.float32)  # white canvas
+    a3 = alpha[..., None]
+    rgb = true_colour[None, None, :] * a3 + rgb * (1 - a3)
+
+    from dressaug.color import rgb_to_lab, delta_e2000
+
+    dark_bg = np.full((size, size, 3), 0.03, np.float32)  # near-black backdrop
+
+    def composite_edge_de(product_rgb):
+        a3_ = alpha[..., None]
+        comp = product_rgb * a3_ + dark_bg * (1 - a3_)
+        edge = (alpha > 0) & (alpha < 1)
+        lab_true = rgb_to_lab(np.tile(true_colour, (edge.sum(), 1)))
+        lab_comp = rgb_to_lab(comp[edge])
+        return float(delta_e2000(lab_true, lab_comp).mean())
+
+    de_before = composite_edge_de(rgb)
+    decontaminated, _ = decontaminate(rgb, alpha)
+    decon_arr = decontaminated
+    de_after = composite_edge_de(decon_arr)
+
+    assert de_after < de_before, (
+        f"decontamination should shrink edge colour error against a dark "
+        f"backdrop: before={de_before:.2f} after={de_after:.2f}"
+    )
+    # A 65% bound, not 100%: `decontaminate` floors alpha at 0.12 before
+    # dividing, deliberately, so the very lowest-alpha rim pixels (alpha
+    # approaching 0, where dividing by a tiny number would amplify noise
+    # into a wild colour) keep some residual white bias on purpose. The
+    # measured reduction here is ~45%; 65% leaves real margin above that
+    # while still failing hard if the fix regresses toward no-op.
+    assert de_after < de_before * 0.65, (
+        f"expected a substantial improvement, only got before={de_before:.2f} "
+        f"after={de_after:.2f}"
+    )
+
+
+def test_the_matte_stage_wires_decontamination_in():
+    """Not just that the function exists -- that the registered stage
+    actually calls it and sets ctx.product from its result, which is what
+    composite() and export() read."""
+    import inspect
+    src = inspect.getsource(stages.matte)
+    assert "decontaminate(" in src
+    assert "ctx.product = _img(decontaminated)" in src
 
 
 # ---------------------------------------------------------------- placement
