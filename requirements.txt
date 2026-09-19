@@ -6,3 +6,6 @@ numpy>=1.26
 # Reading the dataset shards. Only needed to cut fixtures, not to run the
 # pipeline.
 pyarrow>=15.0
+
+# The operator UI.
+gradio>=6.0

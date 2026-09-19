@@ -16,8 +16,8 @@ Six phases, in order. Two are built.
 
 | # | Phase | State |
 |---|---|---|
-| **1** | **Background removal** | **Built.** BiRefNet matting, soft alpha kept unthresholded |
-| **2** | **Putting a relevant background** | **Built.** 11 procedural backdrops, occasionwear palette |
+| **1** | **Background removal** | **Built.** BiRefNet matting, soft alpha kept unthresholded. **In the UI** |
+| **2** | **Putting a relevant background** | **Built.** 11 procedural backdrops, occasionwear palette. **In the UI** |
 | 3 | Change dress colour without changing design | Not started — stage registered and raises |
 | 4 | Handle shaded / multi-tone colours | Not started — stage registered and raises |
 | 5 | Change design a little, by prompt or button | Not started. **The first phase that needs a generative model** |
@@ -32,6 +32,44 @@ A stage for an unbuilt phase **raises** rather than passing the context
 through. A run that looks complete but silently skipped a step is the most
 expensive kind of wrong in a pipeline whose whole claim is that its output can
 be trusted.
+
+---
+
+## 1a. The UI, 2026-09-19
+
+**A single app now exists.** `dressaug.ui` -- upload a photograph, pick garment
+type, fabric, a backdrop (by name or by eye in a thumbnail gallery), export
+sizes, click Process, get files back with the same colour/framing checks the
+CLI reports. Recolour is shown as a disabled, clearly-labelled "coming soon"
+control rather than hidden, so what the app does today is visible by looking
+at it.
+
+Run it:
+
+```powershell
+$env:PYTHONPATH="src"
+.venv\Scripts\python.exe -m dressaug.ui
+```
+
+Verified three ways before being called done, not just imported:
+1. the underlying `process()` generator run directly against a real
+   fixture -- 2 files produced, gates reported, warnings surfaced;
+2. the three guard paths (no image / no backdrop / no export size) checked --
+   each refuses before touching the pipeline;
+3. the server actually **launched** and answered HTTP 200, then closed
+   cleanly -- not just "the Python imports without error".
+
+One real bug found in the process: `_PRESET_LABEL_TO_NAME`, the lookup that
+turns a checkbox label back into an export-preset name, was filled only as a
+side effect of Gradio constructing its widgets. Calling `process()` directly
+-- which is what the first verification step above does, and what
+`tests/test_ui.py` does on every run -- raised `KeyError` on every preset,
+because the widgets that would have populated it hadn't been built yet.
+Fixed by building the map at import time instead of at UI-construction time.
+`test_the_preset_label_map_is_populated_without_building_the_ui` pins it.
+
+**10 new tests**, one of them running the real pipeline end-to-end through the
+UI's own code path rather than through a mock. 25 tests total.
 
 ---
 

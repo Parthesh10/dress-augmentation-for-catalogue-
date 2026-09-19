@@ -1,0 +1,291 @@
+"""Operator UI — one app: add a dress, get catalogue images back.
+
+    $env:PYTHONPATH="src"
+    .venv\\Scripts\\python.exe -m dressaug.ui
+
+Dress-specific only. Nothing here reads or calls the sibling jewellery
+project — the two are separate software that happen to share a parent folder.
+
+Two tools are live: background removal and background replacement. A third,
+recolouring, is not built (Phase 3) and its control is shown disabled rather
+than hidden, so "what does this app do today" is answered by looking at it
+rather than by reading a doc.
+"""
+
+from __future__ import annotations
+
+import tempfile
+import time
+import traceback
+from pathlib import Path
+
+import gradio as gr
+from PIL import Image
+
+from . import backgrounds, stages  # noqa: F401 -- importing stages registers them
+from .cli import use_utf8_console
+from .config import EXPORT_PRESETS, Fabric, Garment, Graph, JobConfig
+from .graphs import stages_for
+from .pipeline import ArtifactStore, Context, JobManifest, PipelineRunner
+
+use_utf8_console()
+
+_GARMENT_LABELS = {
+    Garment.GOWN: "Gown",
+    Garment.PARTY_DRESS: "Party dress",
+    Garment.LEHENGA: "Lehenga",
+    Garment.SAREE: "Saree",
+    Garment.ANARKALI: "Anarkali",
+}
+_FABRIC_LABELS = {
+    Fabric.OPAQUE: "Opaque (cotton, crepe, structured lining)",
+    Fabric.SHEEN: "Sheen (satin, silk, taffeta)",
+    Fabric.VELVET: "Velvet",
+    Fabric.EMBELLISHED: "Embellished (sequins, zari, heavy beading)",
+    Fabric.LACE: "Lace / net",
+    Fabric.SHEER: "Sheer (chiffon, georgette, organza, tulle)",
+}
+_AUTO_FABRIC = "Auto (from garment type)"
+
+
+def _garment_choices() -> list[str]:
+    return [_GARMENT_LABELS[g] for g in Garment]
+
+
+def _fabric_choices() -> list[str]:
+    return [_AUTO_FABRIC] + [_FABRIC_LABELS[f] for f in Fabric]
+
+
+def _garment_from_label(label: str) -> Garment:
+    return next(g for g, l in _GARMENT_LABELS.items() if l == label)
+
+
+def _fabric_from_label(label: str) -> Fabric | None:
+    if label == _AUTO_FABRIC:
+        return None
+    return next(f for f, l in _FABRIC_LABELS.items() if l == label)
+
+
+def _backdrop_gallery() -> list[tuple[Image.Image, str]]:
+    """A thumbnail per preset, for picking a backdrop by eye rather than by
+    name. Rendered once at import time -- these are cheap (~50ms each) and
+    there are only 11 of them."""
+    out = []
+    for name in sorted(backgrounds.PRESETS, key=backgrounds.key_luminance):
+        thumb = backgrounds.render(name, (220, 300), seed=0)
+        out.append((thumb, name))
+    return out
+
+
+_BACKDROP_THUMBS = _backdrop_gallery()
+_BACKDROP_NAMES = [n for _, n in _BACKDROP_THUMBS]
+
+
+def process(
+    image,
+    garment_label: str,
+    fabric_label: str,
+    backdrop_name: str,
+    preset_labels: list[str],
+    progress=gr.Progress(),
+):
+    """One garment through phases 1 and 2. A generator so the operator sees
+    progress rather than a frozen button for 60-180 seconds."""
+    if image is None:
+        yield None, "Add a photograph first.", ""
+        return
+    if not backdrop_name:
+        yield None, "Pick a backdrop.", ""
+        return
+    if not preset_labels:
+        yield None, "Pick at least one export size.", ""
+        return
+
+    progress(0.02, desc="preparing")
+    yield None, "starting…", ""
+
+    with tempfile.TemporaryDirectory() as td:
+        src_path = Path(td) / "source.png"
+        image.save(src_path)
+
+        cfg = JobConfig(
+            graph=Graph.FLAT,
+            garment=_garment_from_label(garment_label),
+            fabric=_fabric_from_label(fabric_label),
+            background=backdrop_name,
+            presets=[_PRESET_LABEL_TO_NAME[p] for p in preset_labels],
+        )
+
+        job_id = f"ui-{int(time.time())}"
+        store = ArtifactStore(job_id)
+        manifest = JobManifest(
+            job_id=job_id, source=str(src_path), profile=cfg.profile,
+            config={"graph": cfg.graph.value, "garment": cfg.garment.value,
+                    "fabric": cfg.resolved_fabric().value,
+                    "background": cfg.background},
+        )
+        ctx = Context(
+            job_id=job_id, source_path=src_path, cfg=cfg,
+            store=store, manifest=manifest,
+        )
+
+        steps = stages_for(cfg.graph)
+        step_progress = {"ingest": 0.05, "matte": 0.15, "background": 0.55,
+                          "composite": 0.75, "gates": 0.85, "export": 0.9}
+
+        def on_progress(name, i, n):
+            frac = step_progress.get(name, i / max(n, 1))
+            label = {"matte": "removing background — the slow step",
+                      "background": "generating backdrop",
+                      "composite": "placing the garment",
+                      "gates": "checking colour and framing",
+                      "export": "writing files"}.get(name, name)
+            progress(frac, desc=label)
+
+        try:
+            m = PipelineRunner().run(ctx, steps, on_progress)
+        except Exception as exc:  # noqa: BLE001 -- surfaced to the operator, not hidden
+            yield None, f"Failed: {exc}", traceback.format_exc(limit=3)
+            return
+
+        m.write(store.dir / "manifest.json")
+
+        if m.status != "ok":
+            note = next((s.note for s in m.stages if s.status == "failed"), "unknown error")
+            yield None, f"Failed: {note}", ""
+            return
+
+        gallery = [Image.open(p).convert("RGB") for p in m.outputs]
+
+        lines = []
+        for g in m.gates:
+            mark = "✓" if g.passed else "✗ FAILED"
+            lines.append(f"{mark}  {g.name}: {g.detail}")
+        report = "\n".join(lines) if lines else "(no gates recorded)"
+
+        warn_lines = "\n".join(f"⚠ {w}" for w in m.warnings) if m.warnings else ""
+
+        progress(1.0, desc="done")
+        yield gallery, report, warn_lines
+
+
+def _build_preset_label_map() -> dict[str, str]:
+    return {f"{name}  ({p.width}×{p.height})": name
+            for name, p in EXPORT_PRESETS.items()}
+
+
+#: Built once at import time, not as a side effect of constructing the UI --
+#: `process()` must work whether or not `build()` has run first (it is called
+#: directly by tests, and would otherwise depend on Gradio widget construction
+#: order to populate a lookup table it needs).
+_PRESET_LABEL_TO_NAME: dict[str, str] = _build_preset_label_map()
+
+
+def _preset_choices() -> list[str]:
+    return list(_PRESET_LABEL_TO_NAME)
+
+
+def build_process_tab() -> None:
+    with gr.Row():
+        with gr.Column(scale=2):
+            image = gr.Image(label="Dress photograph", type="pil", height=420)
+            with gr.Row():
+                garment = gr.Dropdown(
+                    _garment_choices(), value=_GARMENT_LABELS[Garment.PARTY_DRESS],
+                    label="Garment type",
+                )
+                fabric = gr.Dropdown(
+                    _fabric_choices(), value=_AUTO_FABRIC,
+                    label="Fabric",
+                    info="Auto picks a sensible default for the garment type. "
+                         "Set it explicitly for a sheer/net/lace piece.",
+                )
+            backdrop = gr.Radio(
+                _BACKDROP_NAMES, value="studio_ivory", label="Backdrop",
+                info="Pick by eye in the gallery on the right, or by name here.",
+            )
+            preset_defaults = _preset_choices()
+            presets = gr.CheckboxGroup(
+                preset_defaults,
+                value=[p for p in preset_defaults if p.startswith("portrait_2x3")
+                       or p.startswith("web_card_3x4")],
+                label="Export sizes",
+            )
+            with gr.Accordion("Recolour (coming soon)", open=False):
+                gr.Markdown(
+                    "**Not built yet — Phase 3 of the roadmap.** This will let "
+                    "you change the dress colour without touching its design "
+                    "(embroidery, prints and folds preserved). Nothing below "
+                    "does anything today."
+                )
+                gr.ColorPicker(label="Target colour", interactive=False)
+            run_btn = gr.Button("Process", variant="primary")
+
+        with gr.Column(scale=1):
+            gr.Markdown("#### Backdrops, sorted dark → light")
+            gr.Gallery(
+                value=_BACKDROP_THUMBS, columns=3, height=420,
+                show_label=False, object_fit="cover",
+            )
+
+    gr.Markdown("---")
+    with gr.Row():
+        with gr.Column(scale=2):
+            output = gr.Gallery(label="Result", columns=2, height=480)
+        with gr.Column(scale=1):
+            report = gr.Textbox(label="Checks", lines=6, interactive=False)
+            warnings = gr.Textbox(label="Warnings", lines=6, interactive=False)
+
+    run_btn.click(
+        process,
+        inputs=[image, garment, fabric, backdrop, presets],
+        outputs=[output, report, warnings],
+    )
+
+
+def build_status_tab() -> None:
+    gr.Markdown(
+        """
+### What this app actually does today
+
+| Tool | Status |
+|---|---|
+| **Background removal** | Working |
+| **Apply a new background** | Working — 11 backdrops |
+| **Colour change** | Not built (Phase 3) |
+| **Shaded / multi-tone colour** | Not built (Phase 4) |
+| **Design edit by prompt** | Not built (Phase 5) |
+| **Dress on a mannequin** | Not built (Phase 6) |
+
+**Known issue:** on dark backdrops a faint pale edge can show around the
+garment (background-removal cleanup not finished). Prefer the lighter
+backdrops until this is fixed.
+
+Every photograph is checked automatically after processing:
+- **colour_fidelity** — does the dress in the result still match the colour
+  in your original photo (within a small, measured tolerance)?
+- **framing** — is the dress a sensible size in the frame (not tiny, not
+  overflowing)?
+- **cutout_softness** — informational only, tells you how much of the edge
+  is semi-transparent (relevant for net/lace/chiffon).
+        """
+    )
+
+
+def build() -> gr.Blocks:
+    with gr.Blocks(title="Dress Studio") as demo:
+        gr.Markdown("## Dress Studio — background removal & backdrop tool")
+        with gr.Tabs():
+            with gr.Tab("Process a dress"):
+                build_process_tab()
+            with gr.Tab("What's built"):
+                build_status_tab()
+    return demo
+
+
+def main() -> None:
+    build().launch()
+
+
+if __name__ == "__main__":
+    main()

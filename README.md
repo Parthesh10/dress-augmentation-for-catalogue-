@@ -19,8 +19,8 @@ is its scar tissue — see [TASK.md §2](TASK.md).
 
 | Phase | State |
 |---|---|
-| **1 — Background removal** | **Built.** BiRefNet matting, soft alpha kept unthresholded |
-| **2 — Relevant background** | **Built.** 11 procedural backdrops, occasionwear palette |
+| **1 — Background removal** | **Built, in the app.** BiRefNet matting, soft alpha kept unthresholded |
+| **2 — Relevant background** | **Built, in the app.** 11 procedural backdrops, occasionwear palette |
 | 3 — Recolour without changing design | Not started |
 | 4 — Shaded / multi-tone colours | Not started |
 | 5 — Design edits by prompt | Not started. First phase needing a generative model |
@@ -33,7 +33,18 @@ so a run can never look more finished than it is.
 ΔE2000 between 0.16 and 0.20 against a 3.0 budget. Roughly 50-75 s per image
 on CPU. Comparison sheet in `work-reports/phase1-2/`.
 
-**15 tests, one command:** `.venv\Scripts\python.exe tests\run_all.py`
+**25 tests, one command:** `.venv\Scripts\python.exe tests\run_all.py`
+
+---
+
+## The app
+
+```powershell
+$env:PYTHONPATH="src"
+.venv\Scripts\python.exe -m dressaug.ui
+```
+
+Opens at `http://127.0.0.1:7860`. Upload a photograph, choose garment type, fabric, a backdrop (by name or by eye), and export sizes; click Process. Recolour is shown, disabled, labelled "coming soon" -- not built yet, and not hidden either.
 
 ---
 
