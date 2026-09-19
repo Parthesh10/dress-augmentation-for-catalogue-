@@ -33,7 +33,7 @@ so a run can never look more finished than it is.
 ΔE2000 between 0.16 and 0.20 against a 3.0 budget. Roughly 50-75 s per image
 on CPU. Comparison sheet in `work-reports/phase1-2/`.
 
-**45 tests, one command:** `.venv\Scripts\python.exe tests\run_all.py`
+**51 tests, one command:** `.venv\Scripts\python.exe tests\run_all.py`
 
 ---
 
@@ -125,6 +125,26 @@ shop's own photographs** — [TASK.md §5](TASK.md) says what a useful first set
 looks like.
 
 ---
+
+## Studio backdrops with a floor, 2026-09-19
+
+Asked directly for backdrops that look like the subject was "actually
+inside a studio, shot this photo" -- not a colour field. Built
+procedurally, at zero cost (an image-generation connector was available but
+had a zero balance, and the standing instruction was not to risk the free
+tier): all 9 studio/occasion backdrops are now a `"cove"` -- a wall curving
+into a lit floor with no seam, the way a real photography studio's
+backdrop paper actually works. The 2 flat-lay presets, for a garment laid
+on a table, are untouched.
+
+**Two real bugs found while building it, both caught by measuring real
+pixel values rather than eyeballing:** the first version made the floor's
+lift invisible on dark presets (a linear-light ratio disappears into gamma
+compression the darker the base colour is), and the fix for that produced
+a floor measurably *darker* than the wall above it on every preset (a
+lift derived from the wall's own already-darkening gradient just made it
+less dark, not brighter). Both fixed and re-measured before being trusted.
+Full account, including the exact numbers, in [TASK.md §1g](TASK.md).
 
 ## Grounding fix, 2026-09-19
 

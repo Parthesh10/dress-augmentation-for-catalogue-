@@ -366,6 +366,116 @@ def test_occasionwear_presets_are_offered_to_the_flat_graph():
     assert "midnight_velvet" in pool and "champagne_silk" in pool
 
 
+# ---------------------------------------------------------------- the cove
+# Added 2026-09-19. Reported directly, against a real photograph: the flat
+# gradient backdrop "looks like floating in air, definitely edited", and
+# after the grounding fix (bottom-anchored placement, a contact shadow) the
+# same complaint stood -- a shadow cast onto an undifferentiated tint still
+# reads as a shadow painted onto a tint. `_cove` gives the studio presets an
+# actual floor plane, the seamless wall-to-floor sweep every real photography
+# studio backdrop uses, so the shadow has a surface to land on rather than a
+# colour field.
+
+
+def test_studio_presets_are_the_cove_kind_with_a_floor():
+    """Every studio/wall preset that a full-length photo could land on now
+    has a real horizon, not the "off the bottom of frame" default that
+    quietly turns a preset back into a flat gradient."""
+    studio_names = [
+        "studio_ivory", "studio_pearl", "studio_graphite",
+        "champagne_silk", "blush_plaster", "rose_gold_wash",
+        "midnight_velvet", "wine_drape", "emerald_drape",
+    ]
+    for name in studio_names:
+        p = backgrounds.PRESETS[name]
+        assert p.kind == "cove", (name, p.kind)
+        assert p.horizon < 1.0, f"{name} has no floor (horizon={p.horizon})"
+
+
+def test_flatlay_presets_are_untouched_surfaces():
+    """The two presets meant for a garment laid flat on a table have no
+    standing subject and no "floor" concept distinct from the surface
+    itself -- they must not have been swept into the cove conversion."""
+    for name in ("linen_flatlay", "marble_flatlay"):
+        p = backgrounds.PRESETS[name]
+        assert p.kind == "surface", (name, p.kind)
+
+
+def _wall_floor_bands(name, size=(300, 450), seed=5):
+    """Mean sRGB lightness just above and just below the horizon, for a
+    preset with horizon=0.15 (~57.5% down the frame)."""
+    import numpy as np
+    im = np.asarray(backgrounds.render(name, size, seed=seed).convert("L"), np.float32)
+    h = im.shape[0]
+    above = im[int(h * 0.40):int(h * 0.45)].mean()
+    below = im[int(h * 0.75):int(h * 0.85)].mean()
+    return above, below
+
+
+def test_a_cove_render_actually_differs_above_and_below_its_horizon():
+    """Not just that it runs, and not just that it differs -- that the floor
+    reads as *brighter*, the direction a real floor catching bounce light
+    near the camera actually goes. `abs(delta) > threshold` alone would have
+    passed a real, shipped bug: an earlier version of the floor lift based
+    itself on `_wall`'s own output, which carries its own downward-darkening
+    gradient, and produced a floor measurably *darker* than the wall above
+    it (champagne_silk: -13.5 sRGB units) while still satisfying "differs by
+    more than 1.5" easily. This asserts the sign, not just the magnitude."""
+    above, below = _wall_floor_bands("studio_ivory")
+    assert below > above + 1.5, (
+        f"the floor should read brighter than the wall above it: "
+        f"above={above:.2f} below={below:.2f}"
+    )
+
+
+def test_the_floor_is_visible_on_dark_presets_too_not_just_pale_ones():
+    """The specific regression this pins: a linear-light lift (or a lift
+    based on the wall's own already-darkening output) shrinks to almost
+    nothing on a dark preset even when it works fine on a pale one, because
+    gamma compression makes the same linear delta far less visible in sRGB
+    the darker the base colour is. Measured directly: the first working
+    version of this fix gave midnight_velvet only ~2.5 sRGB units of
+    wall/floor separation against 9-11 on a pale preset using the identical
+    formula -- visible on light backdrops, essentially invisible on dark
+    ones. Both families must land in the same ballpark."""
+    pale_above, pale_below = _wall_floor_bands("studio_ivory")
+    dark_above, dark_below = _wall_floor_bands("midnight_velvet")
+    pale_delta = pale_below - pale_above
+    dark_delta = dark_below - dark_above
+    assert dark_delta > 5.0, f"midnight_velvet's floor barely differs: {dark_delta:.2f}"
+    assert dark_delta > pale_delta * 0.4, (
+        f"dark preset's floor separation ({dark_delta:.2f}) is far weaker "
+        f"than the pale preset's ({pale_delta:.2f})"
+    )
+
+
+def test_the_cove_transition_has_no_hard_seam():
+    """A visible line where wall meets floor would read as two flat planes
+    glued together rather than one continuous studio sweep -- the entire
+    reason `_cove` exists over just drawing two rectangles."""
+    import numpy as np
+    im = np.asarray(
+        backgrounds.render("studio_ivory", (300, 450), seed=5).convert("L"), np.float32
+    )
+    h = im.shape[0]
+    horizon_row = int(h * 0.575)
+    band = im[horizon_row - 15:horizon_row + 15, 100:200].mean(axis=1)
+    # the steepest single-row jump within the transition band should still
+    # be gentle relative to the total wall-to-floor difference
+    biggest_step = np.abs(np.diff(band)).max()
+    assert biggest_step < 3.0, f"a hard seam at the horizon: step={biggest_step:.2f}"
+
+
+def test_a_dark_cove_still_renders_without_error_or_negative_light():
+    """Dark presets (midnight_velvet, wine_drape) push the floor maths
+    toward the low end of the linear-light range -- worth pinning that
+    nothing clips into invalid values there."""
+    import numpy as np
+    for name in ("midnight_velvet", "wine_drape"):
+        im = np.asarray(backgrounds.render(name, (200, 300), seed=1))
+        assert im.min() >= 0 and im.max() <= 255
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

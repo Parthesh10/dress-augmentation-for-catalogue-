@@ -418,6 +418,117 @@ to `source.png` would have passed the old version of that test and failed
 this one.
 ---
 
+## 1g. Studio backdrops with an actual floor, 2026-09-19
+
+### The ask
+
+Asked directly, after seeing the grounding fix on a real photo: the flat
+gradient still didn't look like the subject was "actually inside a studio,
+shot this photo". The specific request was studio-style backdrops -- a
+floor to stand on, not a colour field -- and full authority to design,
+build, test and ship it without checking back in.
+
+**No paid generation was used.** The Higgsfield connector's balance was
+checked first (`{"credits": 0, "subscription_plan_type": "free"}`, same as
+recorded when it was checked from the sibling project) and, given the
+standing instruction not to risk the free tier, nothing was spent against
+it. Built procedurally instead -- ₹0 cost, deterministic, fully in this
+project's control, and the same approach every backdrop in this library
+already uses.
+
+### What was built
+
+**`_cove`** (new render kind, `backgrounds.py`): a wall that curves into a
+lit floor, the way a real photography studio's seamless backdrop paper
+actually works -- one continuous sweep from wall to floor with no seam,
+not two flat planes glued together. The 9 studio/occasion presets
+(`studio_ivory` through `emerald_drape`) are now `kind="cove"` with a
+`horizon` (roughly 57% down the frame); the 2 flat-lay presets
+(`linen_flatlay`, `marble_flatlay`) are untouched `"surface"` -- they have
+no standing subject and no floor concept distinct from the tabletop itself.
+
+The floor reads as a genuinely different, closer plane rather than the wall
+continuing to darken, using a depth cue (brighter toward the bottom of the
+frame, the way a real floor catches bounce light close to camera) blended
+across a soft band at the horizon -- deliberately no hard seam, since real
+backdrop paper has none either.
+
+This sits alongside, not instead of, §1d's contact shadow: the shadow was
+always correct in principle, and it reads far more convincingly landing on
+an actual rendered floor than on an undifferentiated gradient. Neither one
+alone was the fix; both together are.
+
+### Two real bugs found while measuring it, not assumed away
+
+Every step here was checked with real numbers before being trusted, the
+same discipline as the rest of this session:
+
+1. **The first working version made the floor invisible on dark presets.**
+   Measured directly: `studio_ivory` showed a healthy 9-21 sRGB-unit
+   difference between wall and floor; `midnight_velvet` and `wine_drape`
+   showed only ~2.5. The floor lift was computed as a linear-light ratio,
+   and that ratio all but disappears into gamma compression on an already
+   dark base colour -- the same amount of *light* produces a much smaller
+   *visible* step the darker the surface already is. Fixed by computing the
+   lift as a fixed amount of **sRGB** lightness instead, which keeps the
+   step comparable regardless of how dark the preset is.
+2. **The fix for that produced a floor darker than the wall above it.**
+   The corrected version based its lift on `_wall`'s own rendered output --
+   but `_wall` already carries a real, intentional downward-darkening
+   gradient (rooms get dimmer toward the floor as bounce light falls off),
+   and lifting *from* an already-darkening curve just produced something
+   less dark, not something visibly brighter. Measured: `champagne_silk`
+   came back **-13.5** sRGB units -- the floor read darker than the wall,
+   which is the wrong direction and would have looked actively broken.
+   Fixed by basing the lift on `_surface`'s undarkened lighting instead of
+   on `_wall`'s already-dimmed output, decoupling "the wall gets dimmer
+   going down" from "the floor is a bright, close plane" -- two different
+   physical facts the first version had conflated.
+
+**A test bug was found alongside the second one.** The original test
+asserted `abs(above - below) > threshold`, which would have passed on the
+broken -13.5 version just as easily as on a correct one -- it checked that
+wall and floor *differ*, not that the floor is *brighter*. Rewritten to
+assert the sign, and a second test added specifically pinning that dark and
+pale presets land in the same ballpark, since that is the exact regression
+that was found and fixed.
+
+**6 new tests** covering: the 9 studio presets are genuinely `cove` with a
+real horizon; the 2 flat-lay presets were not swept in by mistake; the
+floor is measurably brighter than the wall (not merely different); no hard
+seam at the transition; dark presets are not left with an invisible floor;
+and nothing renders out-of-range light on the darkest presets. 31 pipeline
+tests total.
+
+### Verified on three real photographs, including the case that broke first
+
+Re-rendered after each fix, not just after the last one:
+
+| Photo | Backdrop | dE2000 | Notes |
+|---|---|---:|---|
+| `IMG_8364` (dynamic lehenga spin) | `champagne_silk` | 0.15 | Floor visible; foot near frame edge limits how much shows |
+| `IMG_8300` (calm Garba pose) | `studio_pearl` | 0.12 | Floor plane clearly visible with the plant/pot for scale |
+| `06-sarees-red` (real Myntra photo) | `midnight_velvet` | 0.46 | The dark-preset case that was broken twice before landing right -- floor now visibly lighter than the wall above it |
+
+All three passed every gate; colour fidelity was unaffected in every case,
+because grounding touches only the backdrop and placement, never the
+product's own pixels.
+
+### What this does and does not claim
+
+It gives every studio backdrop a real floor and a shadow that lands on it,
+which is a substantial step toward "looks captured, not edited" and was
+verified, by eye, to be one on all three real photographs above -- worth
+sending the actual files for a direct look rather than taking the
+description on trust. It does not add true camera perspective, depth of
+field, or floor reflections of the subject, and it does not touch the
+lighting-direction/hardness mismatch recorded in §1d as a separate, harder
+problem this pipeline does not attempt. A pose where the feet sit very
+close to the very bottom edge of the frame (as in `IMG_8364`) still shows
+less of the floor than a calmer, more centred pose does, simply because
+there is less backdrop exposed around the subject to show it on.
+---
+
 ## 2. What was inherited, and why
 
 | Taken | From | Why |

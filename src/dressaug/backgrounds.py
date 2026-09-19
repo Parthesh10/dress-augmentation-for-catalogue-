@@ -58,7 +58,7 @@ def _grain(w: int, h: int, amount: float, seed: int) -> np.ndarray:
 @dataclass(frozen=True)
 class Preset:
     name: str
-    kind: str          # "surface" | "wall" | "doorway"
+    kind: str          # "surface" | "wall" | "doorway" | "cove"
     base: str          # hex, the lit colour
     shade: str         # hex, the colour it falls off to
     #: Where the key light sits, in normalised coords.
@@ -68,56 +68,61 @@ class Preset:
     grain: float = 0.006
     #: Suits which graph, for the UI to filter sensibly.
     graphs: tuple[str, ...] = ("flat_lay",)
+    #: `kind="cove"` only -- where the wall curves into the floor, in the
+    #: same normalised [-1, 1] y-space `_grid` uses (0.15 is roughly 57%
+    #: down the frame). 1.15 -- off the bottom edge entirely -- for every
+    #: other kind, so nothing else has to know this field exists.
+    horizon: float = 1.15
 
 
 PRESETS: dict[str, Preset] = {
     # ---- neutral studio: the shot that has to work for every garment -------
     "studio_ivory": Preset(
-        "studio_ivory", "wall", "#F4EEE6", "#D6CDC0",
+        "studio_ivory", "cove", "#F4EEE6", "#D6CDC0",
         light=(-0.20, -0.50), falloff=1.30, vignette=0.24, grain=0.005,
-        graphs=("flat", "dummy"),
+        graphs=("flat", "dummy"), horizon=0.15,
     ),
     "studio_pearl": Preset(
-        "studio_pearl", "wall", "#E4E2DE", "#B9B6B1",
+        "studio_pearl", "cove", "#E4E2DE", "#B9B6B1",
         light=(-0.10, -0.45), falloff=1.40, vignette=0.20, grain=0.005,
-        graphs=("flat", "dummy"),
+        graphs=("flat", "dummy"), horizon=0.15,
     ),
     "studio_graphite": Preset(
-        "studio_graphite", "wall", "#514E4B", "#211F1E",
+        "studio_graphite", "cove", "#514E4B", "#211F1E",
         light=(-0.25, -0.40), falloff=1.25, vignette=0.30, grain=0.007,
-        graphs=("flat", "dummy"),
+        graphs=("flat", "dummy"), horizon=0.15,
     ),
     # ---- warm luxe: bridal, mehendi, party ---------------------------------
     "champagne_silk": Preset(
-        "champagne_silk", "wall", "#EBD9BC", "#C0A276",
+        "champagne_silk", "cove", "#EBD9BC", "#C0A276",
         light=(-0.30, -0.40), falloff=1.35, vignette=0.22, grain=0.006,
-        graphs=("flat", "dummy"),
+        graphs=("flat", "dummy"), horizon=0.15,
     ),
     "blush_plaster": Preset(
-        "blush_plaster", "wall", "#F0DCD6", "#CBA9A2",
+        "blush_plaster", "cove", "#F0DCD6", "#CBA9A2",
         light=(-0.15, -0.48), falloff=1.32, vignette=0.24, grain=0.008,
-        graphs=("flat", "dummy"),
+        graphs=("flat", "dummy"), horizon=0.15,
     ),
     "rose_gold_wash": Preset(
-        "rose_gold_wash", "wall", "#E8C4AE", "#B4826A",
+        "rose_gold_wash", "cove", "#E8C4AE", "#B4826A",
         light=(-0.28, -0.42), falloff=1.30, vignette=0.26, grain=0.006,
-        graphs=("flat", "dummy"),
+        graphs=("flat", "dummy"), horizon=0.15,
     ),
     # ---- deep and dramatic: evening gowns ----------------------------------
     "midnight_velvet": Preset(
-        "midnight_velvet", "wall", "#2B3A55", "#0E1522",
+        "midnight_velvet", "cove", "#2B3A55", "#0E1522",
         light=(-0.20, -0.45), falloff=1.28, vignette=0.34, grain=0.007,
-        graphs=("flat", "dummy"),
+        graphs=("flat", "dummy"), horizon=0.15,
     ),
     "wine_drape": Preset(
-        "wine_drape", "wall", "#6E2233", "#2A0C13",
+        "wine_drape", "cove", "#6E2233", "#2A0C13",
         light=(-0.25, -0.40), falloff=1.26, vignette=0.32, grain=0.008,
-        graphs=("flat", "dummy"),
+        graphs=("flat", "dummy"), horizon=0.15,
     ),
     "emerald_drape": Preset(
-        "emerald_drape", "wall", "#1F5145", "#0A1F1A",
+        "emerald_drape", "cove", "#1F5145", "#0A1F1A",
         light=(-0.22, -0.44), falloff=1.28, vignette=0.32, grain=0.008,
-        graphs=("flat", "dummy"),
+        graphs=("flat", "dummy"), horizon=0.15,
     ),
     # ---- surfaces, for a garment photographed laid flat --------------------
     "linen_flatlay": Preset(
@@ -206,7 +211,70 @@ def _doorway(p: Preset, w: int, h: int, seed: int) -> np.ndarray:
     return img
 
 
-_KINDS = {"surface": _surface, "wall": _wall, "doorway": _doorway}
+def _cove(p: Preset, w: int, h: int, seed: int) -> np.ndarray:
+    """A wall curving into a floor -- the seamless "cove" backdrop every real
+    photography studio actually uses, one continuous sweep of paper or vinyl
+    from the wall down onto the floor with no visible seam.
+
+    Built specifically because the flat-gradient wall, however well lit, gave
+    a full-length subject nothing to stand *on* -- reported plainly as
+    "looks like floating in air, definitely edited" even after grounding
+    (bottom-anchored placement, a contact shadow) was already in place. A
+    shadow cast onto an undifferentiated tint still looks like a shadow
+    painted onto a tint; the same shadow landing on an actual rendered floor
+    plane reads as a shadow on a floor, which is the entire point of it.
+    This does not replace `stages.contact_shadow` -- the two are meant to
+    work together, and neither alone was the full fix.
+    """
+    x, y = _grid(w, h)
+    wall = _wall(p, w, h, seed)
+
+    # Depth: 0 at the horizon (far), 1 at the bottom edge (closest to
+    # camera) -- brighter near the front is where a real floor catches the
+    # most bounce light off the subject's own key. This depth cue, not
+    # colour alone, is most of what makes it read as "floor" rather than
+    # "more wall".
+    depth = np.clip((y - p.horizon) / max(1.0 - p.horizon, 0.05), 0, 1)[..., None]
+
+    # Lifted from `_surface`'s lighting, not from `wall`'s own output --
+    # measured and found necessary. `_wall` carries its own downward
+    # darkening gradient (real rooms get dimmer toward the floor as bounce
+    # light falls off), and lifting *from* an already-darkening curve just
+    # produces a floor that is merely "less dark" than the wall beside it
+    # rather than visibly brighter -- the first version of this fix did
+    # exactly that and measured a **negative** wall-to-floor delta on every
+    # preset (champagne_silk: -13.5 sRGB units, the floor reading *darker*
+    # than the wall above it). A photographed floor is a different, closer
+    # surface catching different light, not the wall continuing to dim.
+    #
+    # The lift itself is computed in sRGB space rather than as a linear-light
+    # ratio, and that distinction matters separately: a ratio-based lift
+    # toward `base`/`shade` all but disappears into gamma compression on a
+    # dark preset -- measured at ~2.5 sRGB units of wall/floor separation on
+    # `midnight_velvet` against 9-11 on a pale preset using the identical
+    # formula. A fixed sRGB lift keeps the floor visibly distinct regardless
+    # of how dark the preset is.
+    surface_srgb = np.clip(linear_to_srgb(np.clip(_surface(p, w, h, seed), 0, None)), 0, 1)
+    lift = 0.08 + 0.10 * depth
+    floor = srgb_to_linear(np.clip(surface_srgb + lift, 0, 1))
+
+    # A soft sheen along the centre, the way a matte or lightly glossy
+    # studio floor catches an overhead key -- not a mirror reflection, just
+    # enough falloff across x that the floor does not read as flat paint.
+    sheen = np.exp(-((x / 0.9) ** 2))[..., None]
+    floor = floor * (1 + 0.04 * sheen * depth)
+
+    # Blend wall into floor across a soft band -- the coving curve itself.
+    # No hard seam: real backdrop paper has no edge here either, and a crisp
+    # line would read as two flat planes glued together rather than one
+    # continuous sweep.
+    band = 0.07
+    blend = np.clip((y - (p.horizon - band)) / (2 * band), 0, 1)[..., None]
+    blend = blend * blend * (3 - 2 * blend)  # smoothstep
+    return wall * (1 - blend) + floor * blend
+
+
+_KINDS = {"surface": _surface, "wall": _wall, "doorway": _doorway, "cove": _cove}
 
 
 def render(preset: str, size: tuple[int, int], seed: int = 0) -> Image.Image:
