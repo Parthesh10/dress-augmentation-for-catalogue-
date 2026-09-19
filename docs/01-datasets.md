@@ -107,3 +107,39 @@ would beat it there.
 That is a real project, and it should start when there are real garment
 photographs to train and validate against — not before, and not on casual tops
 at 512 px, which would teach a model the wrong thing very efficiently.
+
+---
+
+## 1.6 Update, 2026-09-19 — real Indian ethnic wear found, on a narrower search
+
+The 2026-09-11 search above was for *women's occasionwear generally*
+("dress", "gown", "party dress", "evening", "bridal"). A different, narrower
+search — for *Indian ethnic wear specifically* — found something usable that
+the first search's terms never surfaced, because "saree" and "kurta" are not
+"dress" or "gown" in English-language dataset naming.
+
+**`benitomartin/fashion-product-images-small-900x1200`** — a full-resolution
+re-upload of Param Aggarwal's Fashion Product Images Dataset (the well-known
+Kaggle dataset scraped from Myntra listings; the HF name is misleading, it is
+"small" only relative to an even larger original). 44,072 rows, 900×1200,
+genuine product photography, women's items labelled by `articleType`
+(Sarees, Kurtas, Kurta Sets, Kurtis, Dupatta) with `gender` filterable.
+
+**One shard (of 14) was downloaded and 60 women's ethnic-wear photographs
+extracted** — 22 sarees, 14 kurtis, 11 kurta sets, 8 kurtas, 5 dupattas, all
+genuinely worn by a model against a studio background. This is what
+`TASK.md §1b`'s person-preservation and full-pipeline testing ran against.
+
+**Licence is the same caveat as everything else here.** The uploader marks
+the compiled dataset CC0; the photographs are Myntra / brand retail product
+photography, and CC0 on a compilation is not the same claim as CC0 on the
+copyright in each photo. `data/ethnic-fixtures/PROVENANCE.json` states this
+in the fixtures' own directory. **Local testing and development only —
+never published, never redistributed**, same as every dataset in this file.
+
+**What this does not close.** This shard had zero lehengas and zero gowns —
+the categories this project's `Garment` enum names as `LEHENGA` and `GOWN`
+remain genuinely untested against real photographs. `articleType` in the
+full dataset does include a `Lehenga Choli` category (one row was seen in an
+earlier, smaller sample); a later shard would likely surface more, if that
+gap needs closing before the shop's own photographs arrive.

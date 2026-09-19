@@ -8,6 +8,10 @@ __pycache__/
 # regenerable from the download commands in docs/01-datasets.md.
 data/raw/
 data/fixtures/
+# Real Indian ethnic-wear photos pulled from a Myntra-derived retail dataset for
+# testing person-preservation. Same posture as data/fixtures/: local development
+# and testing only, never published, never redistributed.
+data/ethnic-fixtures/
 
 # The shop's own garment photographs, once they exist. Same reasoning as the
 # sibling project: source photography is not pushed to a remote.

@@ -74,6 +74,103 @@ the halo fix below added its own).
 
 ---
 
+## 1b. Tested on real Indian ethnic wear, 2026-09-19
+
+Everything before this point was tested on synthetic fixtures and casual
+western tops at 512px -- honest for the algorithms, never a stand-in for the
+real catalogue. This section is the first time real sarees, kurtas and kurta
+sets went through the pipeline, and it answers two questions asked directly:
+does this work on real Indian ethnic wear, and does a person wearing the
+garment survive background removal.
+
+### Where the real photographs came from
+
+`benitomartin/fashion-product-images-small-900x1200` on Hugging Face -- a
+re-upload, at usable resolution, of Param Aggarwal's Fashion Product Images
+Dataset, itself scraped from Myntra listings. Full provenance and the
+licence caveat are in `data/ethnic-fixtures/PROVENANCE.json`: the compiled
+dataset is marked CC0 by the uploader, but the photographs are retail
+product photography and CC0 on a compilation is not the same claim as CC0 on
+each photo's copyright. **Local testing and development only. Never
+published, never committed** -- `data/ethnic-fixtures/` is gitignored.
+
+60 real garments were pulled (22 sarees, 14 kurtis, 11 kurta sets, 8 kurtas,
+5 dupattas), all women's, all genuinely worn by a model against a studio
+background -- this is on-model retail photography, not flat product shots,
+which happens to be exactly the harder and more relevant case.
+
+### Does a person survive background removal?
+
+**Yes, measured on 12 real photographs, not assumed.** Method: a plain
+whiteness threshold on the raw photo as ground truth for "this is the
+subject" (valid because this dataset's backgrounds are genuinely near-pure
+white), compared against BiRefNet's alpha mask.
+
+| | |
+|---|---|
+| Mean IoU across 12 photographs | **0.935** |
+| Head/hair region missed | mean **1.5%**, max **2.5%** |
+
+Two of the twelve came back with a low overall IoU (0.70, 0.64) and both were
+investigated by eye before being explained away, not dismissed. Both are
+white or off-white garments against the white studio background: the
+*ground truth itself* breaks there, because a white-on-white printed pattern
+reads as "background" under the same whiteness threshold that correctly
+identifies real background elsewhere. Diff visualisation confirmed it
+directly -- the "missing" area was entirely the garment's own printed
+pattern, correctly matted, misjudged by the test; the person's head, hair
+and hands showed only a 1px anti-aliasing boundary, no real loss. Both are
+recorded in `work-reports/person-preservation/*.diff.png` for anyone who
+wants to check the reasoning rather than take it on trust.
+
+**So the honest claim is: 12 for 12 on head/hair preservation, with the
+measurement tool itself needing a caveat on 2 of them, not the matting.**
+
+### Does it actually look right?
+
+Seven real garments taken through the full pipeline -- matte, decontaminate,
+composite -- across sarees, kurta sets, kurtis, kurtas and a dupatta, on
+five different backdrops including two dark ones:
+
+| Case | Backdrop | dE2000 | Framing | Cutout |
+|---|---|---:|---|---|
+| Grey/maroon saree | champagne_silk | 0.27 | 23.5% | 2.7% partial (sheer) |
+| Maroon/gold saree | midnight_velvet | 0.47 | 26.1% | 5.7% partial (sheer) |
+| Black/white saree | studio_ivory | 0.10 | 23.5% | 3.0% partial (sheer) |
+| Black churidar suit | wine_drape | 0.34 | 18.2% | 2.3% partial (embellished) |
+| Black kurti | studio_pearl | 0.21 | 35.0% | 2.7% partial (opaque) |
+| White kurta | blush_plaster | 0.17 | 27.7% | 2.4% partial (opaque) |
+| Orange dupatta over white kurta | studio_ivory | 0.29 | 36.2% | 2.4% partial (sheer) |
+
+**7 of 7 passed every gate.** All well inside the 3.0 ΔE2000 budget -- the
+worst is 0.47, more than six times under budget.
+
+Looked at, not just measured -- zoomed crops in `work-reports/
+real-ethnic-composites/`:
+
+- **Hair against a dark backdrop** (maroon saree on `midnight_velvet`):
+  individual strands hold, no white fringe. This is close to the hardest
+  case background removal has -- fine dark hair against a dark backdrop --
+  and it is where the 2026-09-19 halo fix mattered most.
+- **The sheer pallu** on the same photograph: the pink fabric underneath is
+  genuinely visible through the maroon net, with its embroidered motifs
+  rendered crisply rather than smeared, and no residual white haze at the
+  fabric's own soft inner edges.
+
+### What this does and does not prove
+
+It proves the pipeline holds up on real, on-model, worn Indian ethnic wear --
+which is the actual catalogue this needs to serve, not a stand-in. It does
+not prove coverage of every failure mode: 12 photographs is not exhaustive,
+all 12 came from one dataset shot in one studio style, and none of them
+tested a lehenga specifically (this shard had none) or a genuinely crowded,
+low-light, non-studio photograph -- which is what a shop's own phone camera
+will actually produce. `tests/test_person_preservation.py` keeps 3 of the 12
+as a standing regression check, skipping gracefully when the fixtures are not
+on disk, so this does not silently regress -- but it is not a substitute for
+testing against the shop's own first real photographs once they exist.
+---
+
 ## 2. What was inherited, and why
 
 | Taken | From | Why |
@@ -173,18 +270,22 @@ four backdrops -- colour fidelity held (dE 0.29-0.38, still well inside the
       fringe on a very dark backdrop, this floor is the first thing to
       revisit, not a sign the fix did not work.
 
-### P1 — the dataset problem, stated honestly
+### P1 — the dataset problem, partly closed 2026-09-19
 
-- [ ] **There is no public dataset of women's occasionwear at production
-      resolution with a usable licence.** Ten were checked on 2026-09-11;
-      `docs/01-datasets.md` records each and why it was rejected. Two were
-      downloaded and inspected rather than judged from their cards.
-      What is on disk now is 60 development fixtures cut from casual tops at
-      512×512 — honest for exercising the algorithms, useless for tuning any
-      threshold. **The real input is your own photographs**, exactly as it was
-      for the sibling.
+- [x] **Real Indian ethnic wear found and tested against.** Not the
+      women's-occasionwear-specifically search from 2026-09-11 (that still
+      found nothing — see `docs/01-datasets.md`) but a Myntra-derived retail
+      catalogue at real resolution, which does cover sarees, kurtas and kurta
+      sets, at production resolution, worn by real models. §1b has the full
+      account: 12 photographs measured for person-preservation, 7 taken
+      through the full pipeline and looked at. **Local testing only, never
+      published** — same licence caveat as every other dataset here.
+- [ ] **Still missing: lehengas, gowns and party dresses specifically**, and
+      anything shot outside a professional studio. This shard had zero
+      lehengas. The real catalogue this project is for is still untested.
 - [ ] Photograph 20-30 real garments from stock and put them in
-      `data/incoming/`. That, not a bigger download, is what unblocks tuning.
+      `data/incoming/`. That, not a bigger download, is what actually
+      unblocks tuning against *this* shop's stock, lighting and camera.
 
 ### P2 — the next phases
 

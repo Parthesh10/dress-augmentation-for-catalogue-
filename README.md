@@ -33,7 +33,7 @@ so a run can never look more finished than it is.
 ΔE2000 between 0.16 and 0.20 against a 3.0 budget. Roughly 50-75 s per image
 on CPU. Comparison sheet in `work-reports/phase1-2/`.
 
-**25 tests, one command:** `.venv\Scripts\python.exe tests\run_all.py`
+**31 tests, one command:** `.venv\Scripts\python.exe tests\run_all.py`
 
 ---
 
@@ -88,17 +88,26 @@ no torch, so the operator machine stays a numpy-and-PIL install.
 
 ---
 
-## Where the images come from
+## Tested on real Indian ethnic wear, 2026-09-19
 
-`data/` holds development fixtures cut from a public dataset, and they are
-**casual tops at 512 px, not occasionwear**. That is stated in the fixtures'
-own `PROVENANCE.json` and in [docs/01-datasets.md](docs/01-datasets.md), which
-records the ten datasets searched and why each was rejected.
+12 real sarees, kurtas and kurta sets — worn by real models, on Myntra retail
+photography — went through background removal with **mean IoU 0.935** on the
+person-preservation check and **max 2.5% head/hair region loss**. 7 went
+through the full pipeline: **7 of 7 passed every gate**, ΔE2000 between 0.10
+and 0.47 against a 3.0 budget. Full account, including two results that
+needed investigating before being trusted rather than just quoted, in
+[TASK.md §1b](TASK.md).
 
-They are honest for exercising the algorithms and dishonest for tuning any
-threshold. **The real input is the shop's own photographs** — the same
-conclusion the sibling project reached, and the fastest way to move this
-project forward. [TASK.md §5](TASK.md) says what a useful first set looks like.
+**Local testing only — never published.** `data/ethnic-fixtures/` is
+gitignored; see its own `PROVENANCE.json`.
+
+**Not yet tested: lehengas, gowns, party dresses specifically**, or anything
+shot outside a studio. `data/` also holds development fixtures cut from a
+public dataset of **casual tops at 512 px, not occasionwear** — useful for
+exercising the algorithms, useless for tuning a threshold. Both are recorded
+in [docs/01-datasets.md](docs/01-datasets.md). **The real input is still the
+shop's own photographs** — [TASK.md §5](TASK.md) says what a useful first set
+looks like.
 
 ---
 
