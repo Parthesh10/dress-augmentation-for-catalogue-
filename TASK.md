@@ -929,6 +929,152 @@ composited onto a calmer, standing-pose garment shows the floor-line fix
 doing real work, as the §1i/§1j photographs already did.
 ---
 
+## 1l. Ground detection that knows what a floor is, 2026-09-20
+
+### The ask
+
+"Do better ground detection." §1k had prototyped an edge-based detector,
+measured it against the 33 real backdrop photographs from the shared
+board, and rejected it -- it found *a* horizontal line in nearly every
+photograph, including an abstract painting, a sea horizon and a macro
+flower close-up, with no way on pixels alone to tell those from a real
+floor. Its replacement was a number set once per backdrop by eye. Asked
+now to make the automatic version actually work.
+
+### Why the second attempt is a different kind of thing, not a better tuned
+version of the first
+
+"Is this a floor?" is a question about what things *are*, and an edge
+detector only knows where brightness changes. The answer needed a model
+that knows what a floor, a lawn, a rug, a staircase, a sky, a sea and a
+dinner table are -- and ADE20K scene parsing has every one of those as a
+named class. `ground.py` runs a SegFormer trained on it (pinned to a
+revision, same discipline as BiRefNet) in the same shared CUDA
+interpreter §1i wired up -- which is the reason this was *feasible* today
+and not two days ago -- then answers three questions from the class map:
+how much of the frame is ground, where the ground starts, and what else
+dominates the frame.
+
+The class sets are built by **name** from the model's own `id2label`
+inside the worker, not as hard-coded ids: the model's config is the
+single source of truth for what "floor" means, and a revision that
+renumbered classes would surface as a name mismatch rather than a silent
+misclassification. The ids were also checked against the config directly
+before any of this was written, not remembered.
+
+### Calibrated against a known answer, not tuned until it looked plausible
+
+Every threshold in `Thresholds` for this was set against the 33
+photographs from §1k -- each of which already had a by-eye floor line and
+a usable/unusable call recorded **before the model ran**. That order
+matters: it means the numbers below are a score against a fixed answer
+key, not a description of output that was adjusted until it agreed with
+itself.
+
+**Usable / unusable: 31 of 33 agree.** Every one of the six backdrops
+excluded by hand in §1k separates out automatically, each on a rule that
+names its actual reason:
+
+| Backdrop | Rule that catches it | What the model saw |
+|---|---|---|
+| Wedding dinner table | table-height scene | 39% table |
+| Wedding reception tables | table-height scene | 21% table + 20% chair |
+| Night sky over a rocky shore | mostly sky/water | 61% sky (and 15% real, standable "earth" -- still not a catalogue backdrop) |
+| Solid slate-blue colour card | mostly sky/water | 100% sky |
+| Stock-photo-pack's promotional thumbnail | looks like a graphic | 21% signboard |
+
+The colour card is a case where the model corrected the by-eye label,
+not the other way round: §1k had kept it as usable-at-default, and on
+reflection it is not a photographed place at all (the procedural presets
+already do a flat colour better). The label was revised. The
+stock-pack thumbnail was the one that *needed* a new rule -- its 7%
+"floor" was already below the minimum, but the honest reason it isn't a
+backdrop is the 21% "signboard", and no real place on the board came
+back with any signboard/poster/screen at all.
+
+**The two that don't separate: an abstract painting (91% "wall") and a
+macro flower close-up (90% "wall").** A flat, defocused field is a wall
+to the model, indistinguishable from a real plain wall -- and a real plain
+wall *is* a good backdrop, so the rule that would catch these would also
+refuse every drape and curtain on the board. Those two still need a human
+glance. That is the honest ceiling of this approach on this kind of
+input, stated rather than hidden, and pinned as behaviour in
+`test_ground.py` rather than left as a surprise.
+
+**Floor lines: mean error 0.043 against the by-eye calls, on the 15
+backdrops where both exist.** The feet land 65% of the way into the
+detected ground region (`ground_feet_depth`) -- its top edge is the far
+wall, and feet planted there read as standing at the back of the room.
+Thirteen of fifteen are within 0.06. The two outliers are a staircase
+(model 0.75, a mid-step; by-eye 0.92, the bottom landing) and an abstract
+texture wall whose lower third the model reads as floor (0.77 vs 0.90) --
+both plausible placements that differ from the by-eye one, not broken
+ones. In one case (a pavement strip under an ivy wall) the model found a
+real floor the by-eye pass had called a flat wall.
+
+**"No floor" is not "unusable."** This came straight out of the data:
+three of the best drape and curtain backdrops on the board came back with
+0% ground, and are exactly right at the ordinary default placement -- the
+subject stands in front of them. Only sky/water, table-height and
+graphic scenes are refused. A refusal is a **warning in the manifest**,
+not an exception: the operator may know better, and a 500-photo batch
+wants a number to filter on, not an error to catch.
+
+### The batch, fully automatic
+
+Re-rendered a calm standing-pose photograph (`IMG_8374`, hem at floor
+level) against all 33 backdrops with **no floor line set by hand anywhere**:
+the detector decided everything. 28 rendered and passed every gate
+(dE2000 0.29-1.16 against 3.0), 5 skipped automatically with the reasons
+above, 0 failures. Looked at, not just counted: on the rug, the lawn, the
+room, the garden path, the stair step and the red carpet, the hem sits on
+the actual ground plane rather than at a fixed distance from the frame
+edge -- the first batch this session where that is true without a human
+having set the number. Contact sheet, every output, and the per-backdrop
+verdicts as JSON in `work-reports/pin-backdrop-batch-2026-09-20-auto-ground/`.
+The two known residuals are in that sheet too, looking as wrong as
+predicted.
+
+### Wiring
+
+`stages.background` runs the detector on the *original* upload (not the
+cover-cropped canvas) when no floor line was set explicitly, so the answer
+is a property of the photograph -- and it is cached by content, so the
+same backdrop under 500 garments is detected once. The UI defaults to
+automatic with the §1k slider kept as a manual override; the CLI's
+`--floor-frac` is the override there. `matting_device`, `ground_verdict`,
+`ground_usable` and `custom_floor_frac` now reach the written manifest, so
+a batch can be audited from disk. If the CUDA interpreter is absent, or a
+model download fails, the result is exactly the pre-§1l behaviour --
+default placement -- with a `reason` saying why, never an exception.
+
+**13 new tests** (`test_ground.py`): every rule in `judge()` pinned against
+the *actual recorded numbers* the model produced on a real photograph in
+that category -- no GPU, no download, no uncommitted photograph needed;
+plus the graceful no-interpreter path, the full revision SHA, the
+by-name class lookup, and one slow test that actually spawns the worker
+and checks the subprocess/JSON hand-off end to end without claiming a
+semantic verdict on a synthetic image it has no business judging. 88
+tests total.
+
+### What this does not claim
+
+The throughput cost is real and stated: each backdrop's detection spawns a
+fresh interpreter (torch import plus model load, ~10-20s) before the
+sub-second inference. For a real catalogue run that is a one-time cost per
+*backdrop* -- 28 detections for 28 backdrops, cached thereafter for every
+garment -- but it is the same fixed per-call overhead §1i named for
+matting, and the same persistent-worker design would remove it for both.
+Not built here, for the same reason as there.
+
+And it still can't ground a pose that never touched the ground. The
+batch for this section deliberately switched from §1k's mid-jump dance
+photograph to a calm standing pose with the hem at floor level, because a
+subject that is airborne in its own source photograph cannot demonstrate
+a grounding fix succeeding or failing -- which §1k's own batch, in
+hindsight, had been trying to do.
+---
+
 ## 2. What was inherited, and why
 
 | Taken | From | Why |

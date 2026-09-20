@@ -41,7 +41,7 @@ dominated by process/model-load overhead (~80-90s either way for a single
 photo) -- the GPU's win compounds across a batch, not a single image. See
 [TASK.md §1i](TASK.md).
 
-**73 tests, one command:** `.venv\Scripts\python.exe tests\run_all.py`
+**88 tests, one command:** `.venv\Scripts\python.exe tests\run_all.py`
 
 ---
 
@@ -133,6 +133,20 @@ shop's own photographs** — [TASK.md §5](TASK.md) says what a useful first set
 looks like.
 
 ---
+
+## Ground detection that knows what a floor is, 2026-09-20
+
+`ground.py`: a scene-parsing model (SegFormer on ADE20K, pinned, in the
+same shared CUDA interpreter as matting) reads a custom backdrop photo for
+floor / grass / rug / stairs, plants the feet inside that region, and
+refuses backdrops that are mostly sky or water, table-height, or a graphic
+-- as a manifest warning, not an exception. Calibrated against 33 real
+photographs whose floor lines and usable/unusable calls were recorded
+*before* the model ran: 31/33 agree on usable; floor lines within 0.043
+mean error. Known residual: a flat painting or a macro close-up is "wall"
+to the model, same as a real plain wall -- those still need a glance.
+Automatic by default in the UI, with the manual slider kept as override.
+Full account in [TASK.md §1l](TASK.md).
 
 ## Depth of field and a per-backdrop floor line, 2026-09-20
 

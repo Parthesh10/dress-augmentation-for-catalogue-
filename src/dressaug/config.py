@@ -278,6 +278,40 @@ class Thresholds:
     #: distance is in focus with the subject.
     foot_blur_frac: float = 0.015
 
+    # ---- ground detection for custom backdrops, added 2026-09-20 ------------
+    #: Every number here was set against the same 33 real photographed
+    #: backdrops the feature was built on, with a by-eye floor line and a
+    #: usable/unusable call already made for each *before* the detector ran
+    #: -- so these are calibrated against a known answer, not tuned until
+    #: the output looked plausible. See `ground.py` and TASK.md §1l.
+    #:
+    #: Below this share of ground-class pixels, "there is a floor here" is
+    #: not trusted -- an abstract painting and a stock-photo-pack's ad
+    #: graphic both came back with 7-8% "floor" from their bottom edge.
+    ground_min_frac: float = 0.10
+    #: Above this share of sky/water pixels the backdrop is not a place to
+    #: photograph a garment, whatever else is in it (a night sky over a
+    #: rocky shore came back with 20% "earth" -- real, standable, and still
+    #: not a catalogue backdrop).
+    ground_sky_water_max: float = 0.50
+    #: Above this share of table/chair/seat pixels the scene is at table
+    #: height -- a dinner table, a reception's round tables -- with no
+    #: standing-figure floor in it, whatever the model calls the tablecloth.
+    ground_furniture_max: float = 0.30
+    #: Above this share of signboard/poster/screen pixels the "photograph"
+    #: is a graphic -- a stock-photo-pack's own promotional thumbnail came
+    #: back 21% signboard, and nothing that was a real place came back with
+    #: any at all. Low on purpose: text in a real scene is rare and small.
+    ground_graphic_max: float = 0.10
+    #: A row counts as "ground starts here" once ground covers this share of
+    #: its width, searched downward from `ground_search_from` of the height.
+    ground_row_coverage: float = 0.25
+    ground_search_from: float = 0.30
+    #: Where within the detected ground region the feet land, 0 = its top
+    #: edge (the far wall), 1 = the bottom of the frame. 0.65 matched the
+    #: by-eye floor lines within ~0.05 on the large majority of the 33.
+    ground_feet_depth: float = 0.65
+
     # ---- recolouring (phase 3 and 4) ---------------------------------------
     #: A recolour must not move lightness structure, only hue and chroma.
     #: This is the whole of phase 3's "no change in design": the folds, the

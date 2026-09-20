@@ -222,6 +222,14 @@ DIAGNOSTIC_KEYS = (
     "relight_strength",
     "relight_delta_e",
     "composite_size",
+    # 2026-09-20: which device matted, and -- for a custom backdrop -- what
+    # the ground detector concluded and where it planted the feet. Same
+    # reasoning as relight_strength above: a batch of 500 needs these on
+    # disk per job to filter and audit, not only in one process's memory.
+    "matting_device",
+    "ground_verdict",
+    "ground_usable",
+    "custom_floor_frac",
 )
 
 

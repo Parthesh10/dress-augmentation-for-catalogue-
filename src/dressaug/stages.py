@@ -255,6 +255,24 @@ def background(ctx: Context) -> Context:
         lin = srgb_to_linear(_arr(ctx.background))
         ctx.extra["key_luminance"] = float((lin @ np.array([0.2126, 0.7152, 0.0722])).mean())
         ctx.extra["key_direction"] = infer_key_direction(ctx.background)
+
+        # Where the floor is. An explicit floor line set by the operator
+        # always wins; otherwise ask the ground detector (`ground.py`) --
+        # run on the *original* upload, not the cover-cropped canvas, so
+        # the answer is a property of the photograph and cached as one,
+        # reused for every garment and every export size against it.
+        if ctx.extra.get("custom_floor_frac") is None:
+            from . import ground
+            est = ground.detect_ground(custom)
+            ctx.extra["ground_verdict"] = est.reason
+            ctx.extra["ground_usable"] = est.usable
+            if est.floor_frac is not None:
+                ctx.extra["custom_floor_frac"] = est.floor_frac
+            if not est.usable:
+                # Not a hard failure: the operator may know better, and a
+                # batch script may want the number to filter on rather than
+                # an exception to catch. Loud, though.
+                ctx.warn(f"backdrop photo looks unsuitable for a standing figure: {est.reason}")
         ctx.store.image("background", "custom", ctx.background)
         return ctx
 
