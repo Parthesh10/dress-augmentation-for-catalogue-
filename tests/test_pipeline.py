@@ -15,6 +15,7 @@ from dressaug.stages import decontaminate
 from dressaug.config import (
     SEMI_TRANSPARENT, THRESHOLDS, Fabric, Garment, Graph, JobConfig, Phase,
 )
+from dressaug.pipeline import ArtifactStore, Context, JobManifest
 
 
 # ---------------------------------------------------------------- vocabulary
@@ -295,6 +296,24 @@ def test_harmonize_gain_leans_toward_a_warm_backdrop():
     assert gain[0] > 1.0 > gain[2], f"expected R up / B down, got {gain}"
 
 
+def test_custom_backdrop_harmonize_bounds_are_tighter_than_the_preset_ones():
+    """The fix for a real gate failure, 2026-09-20: a strongly saturated
+    flat-colour custom backdrop pushed dE2000 to 3.26 against the 3.0
+    budget at the ordinary (`custom=False`) settings, because every
+    procedural preset was designed with a muted palette this project
+    controls and already measured safely inside budget (§1h), and an
+    operator's own uploaded photograph carries no such guarantee -- it can
+    be any colour, including this adversarial one. `custom=True` must bound
+    the gain more tightly on the exact same adversarial patch."""
+    bg = np.zeros((200, 200, 3), np.float32)
+    bg[..., 0] = 1.0  # pure, maximally saturated red
+    ordinary = stages.harmonize_gain(bg, ox=0, oy=0, w=200, h=200, custom=False)
+    cautious = stages.harmonize_gain(bg, ox=0, oy=0, w=200, h=200, custom=True)
+    assert (cautious.max() - 1.0) < (ordinary.max() - 1.0)
+    assert cautious.max() <= THRESHOLDS.harmonize_gain_max_custom + 1e-6
+    assert cautious.min() >= THRESHOLDS.harmonize_gain_min_custom - 1e-6
+
+
 def test_harmonize_gain_is_bounded_regardless_of_backdrop_saturation():
     """However saturated the sampled backdrop patch, the gain can never
     leave the configured [min, max] band -- the actual guarantee against
@@ -335,6 +354,88 @@ def test_compose_actually_applies_the_harmonize_gain_to_the_pasted_subject():
     mean_rgb = out_arr[mask].mean(axis=0)
     assert mean_rgb[0] > 128 + 2, f"expected red to lift on a warm backdrop, got {mean_rgb}"
     assert mean_rgb[2] < 128 - 2, f"expected blue to drop on a warm backdrop, got {mean_rgb}"
+
+
+# ------------------------------------------------------- custom backdrop
+
+
+def test_fit_custom_background_covers_the_canvas_without_distortion():
+    """A photographed backdrop's own aspect ratio almost never matches the
+    export canvas exactly. `fit_custom_background` must cover the canvas
+    completely (no letterboxing) without stretching -- checked by pinning
+    the exact output size and that the source's own aspect ratio survives
+    the resize step before cropping."""
+    bg = Image.new("RGB", (1000, 400), (100, 150, 200))  # wide source, 2.5:1
+    out = stages.fit_custom_background(bg, (300, 450))  # narrow canvas, 2:3
+    assert out.size == (300, 450)
+
+
+def test_fit_custom_background_crops_from_the_centre():
+    """Cropped from the middle, not a corner -- a real backdrop photo is
+    more likely to have its actual subject (an arch, a drape, a doorway)
+    centred than aligned to one edge. Pinned with a horizontal gradient: the
+    cropped result's own mean should sit near the source's centre value,
+    not near either extreme."""
+    w, h = 900, 300
+    gradient = np.tile(np.linspace(0, 255, w, dtype=np.uint8), (h, 1))
+    bg = Image.fromarray(np.stack([gradient] * 3, axis=-1), "RGB")
+    out = stages.fit_custom_background(bg, (300, 300))
+    mean = np.asarray(out, np.float32).mean()
+    assert 100 < mean < 155, f"expected a near-centre crop, got mean={mean:.1f}"
+
+
+def test_infer_key_direction_leans_toward_the_brighter_side():
+    """No authored `key_direction` exists for an operator's own photograph,
+    so one is guessed from where the image itself is bright -- the same
+    "measure the real pixels, don't assume" approach as `harmonize_gain`.
+    A backdrop lit from the right should point the shadow away from it."""
+    bg = np.full((300, 400, 3), 60, np.uint8)
+    bg[: int(300 * 0.6), 250:] = 220  # bright patch, upper-right
+    dx, dy = stages.infer_key_direction(Image.fromarray(bg, "RGB"))
+    assert dx > 0, f"expected a rightward key direction, got dx={dx}"
+    assert dy < 0
+
+
+def test_infer_key_direction_is_neutral_on_an_evenly_lit_backdrop():
+    bg = Image.new("RGB", (400, 300), (128, 128, 128))
+    dx, dy = stages.infer_key_direction(bg)
+    assert abs(dx) < 0.05, f"expected near-zero on a flat field, got dx={dx}"
+
+
+def test_export_uses_the_custom_background_at_every_export_size_too():
+    """The bug found running this for real, 2026-09-20: `composite` picks up
+    a custom background correctly, but `export` re-renders the backdrop a
+    *second* time, fresh, at each export preset's own exact resolution --
+    and its original call unconditionally called `backgrounds.render(name,
+    ...)`, which raised `KeyError: unknown background 'custom'` the moment
+    the graph reached `export`, even though `composite` had already worked.
+    Pinned directly on the generated source so a regression can't reintroduce
+    an unconditional `backgrounds.render` call in `export`."""
+    import inspect
+    src = inspect.getsource(stages.export)
+    assert "fit_custom_background" in src
+    assert "custom_background" in src
+
+
+def test_a_custom_background_is_used_instead_of_the_named_preset():
+    """The registered `background` stage must prefer `ctx.extra
+    ["custom_background"]` over `ctx.cfg.background` when both are present
+    -- an operator who uploaded their own photo did not also mean to fall
+    back to a preset silently."""
+    ctx = Context(
+        job_id="custom-bg-test", source_path=pathlib.Path("unused.png"),
+        cfg=JobConfig(background="studio_ivory"),
+        store=ArtifactStore("custom-bg-test"),
+        manifest=JobManifest(job_id="custom-bg-test", source="unused.png", profile="x"),
+    )
+    ctx.source = Image.new("RGB", (400, 600), (200, 200, 200))
+    ctx.extra["custom_background"] = Image.new("RGB", (800, 1200), (30, 90, 40))
+    ctx = stages.background(ctx)
+    assert ctx.extra["backdrop_used"] == "custom"
+    mean_rgb = np.asarray(ctx.background, np.float32).mean(axis=(0, 1))
+    # Green channel should dominate -- proof the *uploaded* colour landed in
+    # the canvas, not studio_ivory's own pale, warm-neutral rendering.
+    assert mean_rgb[1] > mean_rgb[0] and mean_rgb[1] > mean_rgb[2], mean_rgb
 
 
 # ---------------------------------------------------------------- placement

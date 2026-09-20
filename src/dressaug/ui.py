@@ -104,6 +104,7 @@ def process(
     garment_label: str,
     fabric_label: str,
     backdrop_name: str,
+    custom_backdrop_path,
     preset_labels: list[str],
     progress=gr.Progress(),
 ):
@@ -112,12 +113,14 @@ def process(
     if image is None:
         yield None, "Add a photograph first.", ""
         return
-    if not backdrop_name:
-        yield None, "Pick a backdrop.", ""
+    if not backdrop_name and not custom_backdrop_path:
+        yield None, "Pick a backdrop, or upload your own.", ""
         return
     if not preset_labels:
         yield None, "Pick at least one export size.", ""
         return
+
+    custom_backdrop = load_upload(custom_backdrop_path)
 
     progress(0.02, desc="preparing")
     yield None, "starting…", ""
@@ -130,7 +133,7 @@ def process(
             graph=Graph.FLAT,
             garment=_garment_from_label(garment_label),
             fabric=_fabric_from_label(fabric_label),
-            background=backdrop_name,
+            background=backdrop_name or "custom",
             presets=[_PRESET_LABEL_TO_NAME[p] for p in preset_labels],
         )
 
@@ -140,12 +143,15 @@ def process(
             job_id=job_id, source=str(src_path), profile=cfg.profile,
             config={"graph": cfg.graph.value, "garment": cfg.garment.value,
                     "fabric": cfg.resolved_fabric().value,
-                    "background": cfg.background},
+                    "background": "custom photo" if custom_backdrop is not None
+                    else cfg.background},
         )
         ctx = Context(
             job_id=job_id, source_path=src_path, cfg=cfg,
             store=store, manifest=manifest,
         )
+        if custom_backdrop is not None:
+            ctx.extra["custom_background"] = custom_backdrop
 
         steps = stages_for(cfg.graph)
         step_progress = {"ingest": 0.05, "matte": 0.15, "background": 0.55,
@@ -253,6 +259,28 @@ def build_process_tab() -> None:
                 _BACKDROP_NAMES, value="studio_ivory", label="Backdrop",
                 info="Pick by eye in the gallery on the right, or by name here.",
             )
+            with gr.Accordion("Or use your own backdrop photo", open=False):
+                gr.Markdown(
+                    "Upload a photograph — your own venue, your own decor "
+                    "setup, or stock you've actually licensed for commercial "
+                    "use. **Not a screenshot or download from Pinterest, "
+                    "Instagram, or a search engine** — those belong to "
+                    "whoever photographed them, and using them on a storefront "
+                    "without a licence is a real legal risk, not a formality. "
+                    "When a photo is uploaded here, it replaces the preset "
+                    "above; the same grounding, shadow, and colour checks run "
+                    "on it either way."
+                )
+                custom_backdrop = gr.File(
+                    label="Backdrop photograph (optional)",
+                    file_types=["image", ".heic", ".heif"],
+                    height=100,
+                )
+                custom_backdrop_preview = gr.Image(
+                    label="Backdrop preview", type="pil", height=160, interactive=False,
+                )
+                custom_backdrop.change(
+                    load_upload, [custom_backdrop], [custom_backdrop_preview])
             preset_defaults = _preset_choices()
             presets = gr.CheckboxGroup(
                 preset_defaults,
@@ -287,7 +315,7 @@ def build_process_tab() -> None:
 
     run_btn.click(
         process,
-        inputs=[image, upload, garment, fabric, backdrop, presets],
+        inputs=[image, upload, garment, fabric, backdrop, custom_backdrop, presets],
         outputs=[output, report, warnings],
     )
 

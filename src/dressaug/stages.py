@@ -185,6 +185,55 @@ def matte(ctx: Context) -> Context:
 # -------------------------------------------- 3. background  (PHASE 2)
 
 
+def fit_custom_background(bg: Image.Image, size: tuple[int, int]) -> Image.Image:
+    """Scale-and-crop a photographed backdrop to the composite canvas size.
+
+    Covers the canvas completely rather than stretching or letterboxing --
+    the same "cover" fit any real photo gets when its own frame doesn't
+    match the canvas exactly. Cropped from the centre: an operator's own
+    backdrop photograph is more likely to have its actual subject (a floral
+    arch, a doorway, a drape) centred than aligned to one edge.
+    """
+    cw, ch = size
+    bw, bh = bg.size
+    scale = max(cw / bw, ch / bh)
+    nw, nh = max(int(bw * scale + 0.5), cw), max(int(bh * scale + 0.5), ch)
+    resized = bg.convert("RGB").resize((nw, nh), Image.LANCZOS)
+    x0, y0 = (nw - cw) // 2, (nh - ch) // 2
+    return resized.crop((x0, y0, x0 + cw, y0 + ch))
+
+
+def infer_key_direction(bg: Image.Image) -> tuple[float, float]:
+    """A light direction guessed from a real photograph's own brightness.
+
+    Only used for a **custom, operator-supplied** backdrop -- one of this
+    project's own procedural presets carries an authored `key_direction`
+    instead (see `backgrounds.key_direction`), because its light is a
+    decision this project made, not something that has to be guessed. A
+    real photograph's lighting can come from anywhere, including several
+    sources at once or none obvious at all; this is a reasonable default so
+    the contact shadow still falls in a plausible direction rather than a
+    fixed one that may be wrong, not a claim to have actually found the
+    light source.
+
+    Sampled from the upper 60% of the frame -- where a real backdrop's own
+    light source (a window, a sky, a lamp) shows up -- rather than the
+    whole image, which would let a bright floor or a pale garment area bias
+    the answer toward "brightest object" instead of "brightest direction".
+    """
+    arr = srgb_to_linear(_arr(bg))
+    h, w = arr.shape[:2]
+    luma = arr[: max(int(h * 0.6), 1)].mean(axis=2)
+    weights = luma.sum(axis=0)
+    if weights.sum() < 1e-6:
+        return (-0.25, -0.45)
+    xs = np.linspace(-1, 1, w, dtype=np.float32)
+    cx = float((xs * weights).sum() / weights.sum())
+    # Shadow falls away from the bright side, same convention as every
+    # authored preset: key_dir points from the subject toward the light.
+    return (float(np.clip(cx * 0.6, -0.4, 0.4)), -0.45)
+
+
 @REGISTRY.register("background")
 def background(ctx: Context) -> Context:
     """PHASE 2 — generate the backdrop the garment will stand in front of."""
@@ -192,6 +241,22 @@ def background(ctx: Context) -> Context:
     w, h = ctx.source.size
     scale = 1800 / max(w, h)
     size = (max(int(w * scale), 640), max(int(h * scale), 640)) if scale > 1 else (w, h)
+
+    custom = ctx.extra.get("custom_background")
+    if custom is not None:
+        # An operator-supplied photograph, not one of this project's own
+        # procedural presets -- see `ui.py`'s upload widget and the licence
+        # note beside it. `key_luminance`/`key_direction` are measured from
+        # the photograph itself rather than looked up, because there is no
+        # authored preset to look them up from.
+        ctx.background = fit_custom_background(custom, size)
+        ctx.extra["backdrop_used"] = "custom"
+        ctx.extra["composite_size"] = size
+        lin = srgb_to_linear(_arr(ctx.background))
+        ctx.extra["key_luminance"] = float((lin @ np.array([0.2126, 0.7152, 0.0722])).mean())
+        ctx.extra["key_direction"] = infer_key_direction(ctx.background)
+        ctx.store.image("background", "custom", ctx.background)
+        return ctx
 
     preset = ctx.cfg.background
     seed = abs(hash(ctx.job_id)) % 9973
@@ -320,7 +385,9 @@ def contact_shadow(
     return np.asarray(img, dtype=np.float32) / 255.0
 
 
-def harmonize_gain(bg_srgb: np.ndarray, ox: int, oy: int, w: int, h: int) -> np.ndarray:
+def harmonize_gain(
+    bg_srgb: np.ndarray, ox: int, oy: int, w: int, h: int, *, custom: bool = False,
+) -> np.ndarray:
     """The per-channel linear-light gain that lends the subject a sliver of
     the backdrop's own ambient colour, so it reads as lit by the same room
     rather than lit somewhere else and pasted in.
@@ -338,8 +405,17 @@ def harmonize_gain(bg_srgb: np.ndarray, ox: int, oy: int, w: int, h: int) -> np.
     `harmonize_gain_min/max` clamp -- because this runs before the
     `colour_fidelity` gate, not instead of it, and the gate is the actual
     backstop against drifting the garment's true colour.
+
+    `custom=True` halves both of those bounds -- see
+    `Thresholds.harmonize_strength_custom`'s own comment for why an
+    operator-uploaded backdrop photograph needs the more cautious setting
+    while every built-in preset keeps the ordinary one.
     """
     T = THRESHOLDS
+    strength = T.harmonize_strength_custom if custom else T.harmonize_strength
+    gmin = T.harmonize_gain_min_custom if custom else T.harmonize_gain_min
+    gmax = T.harmonize_gain_max_custom if custom else T.harmonize_gain_max
+
     bh, bw = bg_srgb.shape[:2]
     cx = ox + w // 2
     radius = max(w // 2, 8)
@@ -354,8 +430,8 @@ def harmonize_gain(bg_srgb: np.ndarray, ox: int, oy: int, w: int, h: int) -> np.
         return np.ones(3, np.float32)
     cast = patch / luma  # colour only, brightness normalised out
 
-    gain = 1.0 + T.harmonize_strength * (cast - 1.0)
-    return np.clip(gain, T.harmonize_gain_min, T.harmonize_gain_max).astype(np.float32)
+    gain = 1.0 + strength * (cast - 1.0)
+    return np.clip(gain, gmin, gmax).astype(np.float32)
 
 
 def compose(
@@ -363,6 +439,8 @@ def compose(
     product: Image.Image,
     alpha: np.ndarray,
     key_dir: tuple[float, float] = (-0.25, -0.45),
+    *,
+    custom_backdrop: bool = False,
 ):
     """Alpha-composite in linear light. Fractional alpha is honoured exactly.
 
@@ -381,7 +459,7 @@ def compose(
     canvas *= (1 - THRESHOLDS.contact_shadow_opacity * shadow)[..., None]
 
     h, w = a_res.shape
-    gain = harmonize_gain(bg_srgb, ox, oy, w, h)
+    gain = harmonize_gain(bg_srgb, ox, oy, w, h, custom=custom_backdrop)
     piece = srgb_to_linear(_arr(p_res)) * gain[None, None, :]
     region = canvas[oy:oy + h, ox:ox + w]
     a = a_res[..., None]
@@ -395,7 +473,9 @@ def compose(
 def composite(ctx: Context) -> Context:
     assert ctx.background is not None and ctx.product is not None and ctx.alpha is not None
     key_dir = ctx.extra.get("key_direction", (-0.25, -0.45))
-    out, scene_alpha = compose(ctx.background, ctx.product, ctx.alpha, key_dir)
+    is_custom = ctx.extra.get("custom_background") is not None
+    out, scene_alpha = compose(
+        ctx.background, ctx.product, ctx.alpha, key_dir, custom_backdrop=is_custom)
     ctx.composited = out
     ctx.composited_alpha = scene_alpha
     ctx.store.image("composite", "result", out)
@@ -448,12 +528,24 @@ def export(ctx: Context) -> Context:
     stem = ctx.source_path.stem.replace(" ", "-").lower()[:48]
     backdrop = ctx.extra.get("backdrop_used", ctx.cfg.background)
     key_dir = ctx.extra.get("key_direction", (-0.25, -0.45))
+    custom = ctx.extra.get("custom_background")
     seed = abs(hash(ctx.job_id)) % 9973
 
     for name in ctx.cfg.presets:
         preset = EXPORT_PRESETS[name]
-        canvas = backgrounds.render(backdrop, (preset.width, preset.height), seed=seed)
-        out, _ = compose(canvas, ctx.product, ctx.alpha, key_dir)
+        # Each export size gets the backdrop rendered fresh at its own exact
+        # resolution, rather than resizing `composite`'s single working-size
+        # canvas -- a procedural preset renders identically either way, but
+        # a photographed one does not: resizing an already-cover-cropped
+        # canvas a second time would crop it twice. `fit_custom_background`
+        # re-covers straight from the original upload each time instead.
+        canvas = (
+            fit_custom_background(custom, (preset.width, preset.height))
+            if custom is not None
+            else backgrounds.render(backdrop, (preset.width, preset.height), seed=seed)
+        )
+        out, _ = compose(
+            canvas, ctx.product, ctx.alpha, key_dir, custom_backdrop=custom is not None)
         path = OUT_DIR / f"{stem}--{name}.jpg"
         out.save(path, "JPEG", quality=preset.quality, subsampling=1, optimize=True)
         ctx.exports[name] = str(path)

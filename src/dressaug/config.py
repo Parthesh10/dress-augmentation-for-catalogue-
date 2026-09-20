@@ -240,6 +240,18 @@ class Thresholds:
     #: the subject further than a believable "same room" adjustment.
     harmonize_gain_min: float = 0.92
     harmonize_gain_max: float = 1.08
+    #: The same idea, applied more cautiously to an operator's own uploaded
+    #: backdrop photograph. Every procedural preset above was designed with
+    #: a specific, muted palette and already measured safely inside the
+    #: colour_fidelity budget (§1h: 0.24-2.12 against 3.0). A photographed
+    #: backdrop carries no such guarantee -- it can be any colour at all,
+    #: including strongly saturated ones -- so it gets half the strength and
+    #: half the deviation range. Found necessary on the first real test: a
+    #: single strongly saturated flat colour pushed dE2000 to 3.26, over
+    #: budget, at the ordinary preset settings.
+    harmonize_strength_custom: float = 0.08
+    harmonize_gain_min_custom: float = 0.96
+    harmonize_gain_max_custom: float = 1.04
 
     # ---- recolouring (phase 3 and 4) ---------------------------------------
     #: A recolour must not move lightness structure, only hue and chroma.

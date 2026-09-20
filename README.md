@@ -41,7 +41,7 @@ dominated by process/model-load overhead (~80-90s either way for a single
 photo) -- the GPU's win compounds across a batch, not a single image. See
 [TASK.md §1i](TASK.md).
 
-**61 tests, one command:** `.venv\Scripts\python.exe tests\run_all.py`
+**70 tests, one command:** `.venv\Scripts\python.exe tests\run_all.py`
 
 ---
 
@@ -133,6 +133,23 @@ shop's own photographs** — [TASK.md §5](TASK.md) says what a useful first set
 looks like.
 
 ---
+
+## Custom backdrop photos, 2026-09-20
+
+An operator can upload **any photograph** as a backdrop now -- their own
+venue, their own decor setup, or properly licensed stock -- instead of only
+picking from the built-in procedural library. Wired through the UI (an "Or
+use your own backdrop photo" upload, with an explicit licence note beside
+it -- Pinterest/Instagram/search-engine images are not licensed for
+commercial use) and the CLI (`--custom-backdrop PATH`). The same grounding,
+shadow, and colour-fidelity checks run either way.
+
+One real gate failure surfaced by an actual end-to-end test: a strongly
+saturated custom backdrop pushed the §1h lighting-harmonisation nudge over
+budget, because the built-in presets were designed with a muted palette
+this project controls and an uploaded photo carries no such guarantee.
+Fixed with separate, more cautious harmonisation bounds for custom
+backdrops specifically. Full account in [TASK.md §1j](TASK.md).
 
 ## Matting on the GPU, measured before being trusted, 2026-09-20
 

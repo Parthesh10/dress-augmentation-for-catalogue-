@@ -735,6 +735,83 @@ jobs rather than one) that deserves its own careful pass rather than being
 folded into this one, not because it isn't worth doing.
 ---
 
+## 1j. Custom backdrop photos, 2026-09-20
+
+### The ask, and the copyright line drawn around it
+
+Shared a Pinterest board (`raahboutique/background`) of event/decor
+backdrop photography — floral arches, string-light drapes, ornate palace
+interiors, garden archways, mandap-style drapes — and asked for a way to
+put garment photos into backgrounds like these. This is a materially
+different category from this project's own procedural studio presets: real
+photographed locations and decor setups, not a colour field with a floor.
+
+**The 33 photographs on that board are not licensed for this.** They are
+pinned from other photographers' and decor vendors' own work, and using
+them behind product photography on a commercial storefront is a real
+copyright exposure, not a formality — flagged directly before building
+anything. The operator's own reply took explicit responsibility for the
+licensing side and asked for a working test batch against the board's own
+images specifically, to see which ones actually work before deciding what
+to do about sourcing properly-licensed versions. That batch is built and
+reported below; the underlying feature this section documents does not
+itself depend on any specific photograph's licence, and is the actual,
+durable answer to "let me use a real photograph as a backdrop" once
+properly-licensed images are in hand.
+
+### What was built
+
+An operator can now upload **any photograph** as a backdrop instead of
+picking one of this project's own procedural presets — wired through both
+the UI (an "Or use your own backdrop photo" upload, next to the licence
+warning above) and the CLI (`--custom-backdrop PATH`).
+
+Everything downstream — grounding, contact shadow, lighting harmonisation,
+the colour-fidelity gate — runs on a custom photograph exactly as it does
+on a procedural preset, with two things measured from the photograph
+itself rather than looked up, because there is no authored preset to look
+them up from:
+
+- **`fit_custom_background`** covers the export canvas from the photograph
+  (crop, not stretch or letterbox) at every export size independently —
+  found necessary rather than assumed: the first version resized
+  `composite`'s already-cropped working canvas a second time in `export`,
+  which crops twice and drifts the framing at every size but the first.
+- **`infer_key_direction`** guesses a plausible light direction from where
+  the photograph itself is brightest in its upper 60% (a window, a sky, a
+  practical light) — not a claim to have found the true light source, only
+  a better default than a fixed one that might be wrong for a specific
+  photograph.
+
+### The one real gate failure this surfaced, and the fix
+
+Running an actual end-to-end test caught something the built-in preset
+library never had to face: a single strongly saturated flat-colour test
+backdrop pushed the lighting-harmonisation nudge (§1h) to **dE2000 3.26**,
+over the 3.0 colour-fidelity budget. Every procedural preset was designed
+with a specific, muted palette and already measured safely inside that
+budget across four real photographs (§1h: 0.24–2.12) — an operator's own
+uploaded photograph carries no such guarantee, since it can be any colour
+at all. Fixed by giving custom backdrops their own, more cautious
+harmonisation bounds — half the strength, half the deviation range —
+rather than weakening the setting that was already proven safe for every
+built-in preset. `harmonize_gain(..., custom=True)`.
+
+### Tests
+
+**8 new tests**: the canvas-cover fit is exact and centre-cropped, not
+stretched; the key-direction guess leans toward the photograph's own bright
+side and stays neutral on a flat one; `stages.background` prefers a custom
+photo over the configured preset name; `export` actually re-fits the custom
+photo at each size rather than calling `backgrounds.render` on a name that
+was never a real preset (the exact bug found above, pinned directly against
+a regression); the custom-backdrop harmonisation bounds are measurably
+tighter than the ordinary ones on the same adversarial saturated patch; a
+missing preset name is no longer refused once a custom photo stands in for
+it; and a full real-pipeline run with a synthetic custom backdrop clears
+every gate. 70 tests total.
+---
+
 ## 2. What was inherited, and why
 
 | Taken | From | Why |

@@ -111,7 +111,7 @@ def test_the_app_builds_without_error():
 
 def test_missing_image_is_refused_without_running_the_pipeline():
     result = list(ui.process(
-        None, None, "Gown", ui._AUTO_FABRIC, "studio_ivory",
+        None, None, "Gown", ui._AUTO_FABRIC, "studio_ivory", None,
         ui._preset_choices()[:1], progress=_NoProgress(),
     ))[-1]
     assert result[0] is None
@@ -121,7 +121,7 @@ def test_missing_image_is_refused_without_running_the_pipeline():
 def test_missing_backdrop_is_refused():
     img = Image.new("RGB", (80, 80), (180, 140, 140))
     result = list(ui.process(
-        img, None, "Gown", ui._AUTO_FABRIC, "",
+        img, None, "Gown", ui._AUTO_FABRIC, "", None,
         ui._preset_choices()[:1], progress=_NoProgress(),
     ))[-1]
     assert result[0] is None
@@ -131,11 +131,30 @@ def test_missing_backdrop_is_refused():
 def test_missing_presets_is_refused():
     img = Image.new("RGB", (80, 80), (180, 140, 140))
     result = list(ui.process(
-        img, None, "Gown", ui._AUTO_FABRIC, "studio_ivory", [],
+        img, None, "Gown", ui._AUTO_FABRIC, "studio_ivory", None, [],
         progress=_NoProgress(),
     ))[-1]
     assert result[0] is None
     assert "export size" in result[1].lower()
+
+
+def test_a_custom_backdrop_photo_bypasses_the_missing_backdrop_refusal():
+    """The other half of `test_missing_backdrop_is_refused`: an empty preset
+    *name* must not be refused for lacking a backdrop when a custom photo
+    stands in for it. Paired with an empty export-size list so this stays a
+    fast guard-logic check rather than running the real (slow) pipeline --
+    the *next* guard is expected to fire instead, and which one fires is
+    exactly what this test is checking."""
+    img = Image.new("RGB", (80, 80), (180, 140, 140))
+    result = list(ui.process(
+        img, None, "Gown", ui._AUTO_FABRIC, "", str(FIXTURE), [],
+        progress=_NoProgress(),
+    ))[-1]
+    assert result[0] is None
+    assert "export size" in result[1].lower(), (
+        f"expected the *next* guard (export size) to fire, not a backdrop "
+        f"refusal, once a custom photo was given: {result[1]!r}"
+    )
 
 
 def test_export_stem_uses_the_original_filename_not_a_placeholder():
@@ -159,7 +178,7 @@ def test_process_runs_the_real_pipeline_end_to_end():
         return
     img = Image.open(FIXTURE).convert("RGB")
     gallery, report, warnings = list(ui.process(
-        img, str(FIXTURE), "Gown", ui._AUTO_FABRIC, "champagne_silk",
+        img, str(FIXTURE), "Gown", ui._AUTO_FABRIC, "champagne_silk", None,
         ui._preset_choices()[:2], progress=_NoProgress(),
     ))[-1]
     assert gallery is not None and len(gallery) == 2
@@ -176,6 +195,38 @@ def test_process_runs_the_real_pipeline_end_to_end():
     from dressaug.config import OUT_DIR
     expected = OUT_DIR / f"{ui._export_stem(str(FIXTURE))}--portrait_2x3.jpg"
     assert expected.exists(), f"expected export at {expected}"
+
+
+def test_a_custom_backdrop_photo_runs_through_the_real_pipeline():
+    """2026-09-20: an operator asked to use their own backdrop photographs
+    (event/decor style backgrounds far richer than this project's own
+    procedural presets) rather than being limited to the built-in library.
+    Proves the *whole* path, not just the guard logic above: an uploaded
+    photograph reaches `stages.background`, gets used as the actual
+    backdrop, and the export still clears every gate -- with no preset name
+    involved anywhere.
+
+    Slow, like the test above, and for the same reason: this is the one
+    place a synthetic fixture can't stand in for a real matting pass."""
+    if not FIXTURE.exists():
+        print("  (skipped -- no fixture on disk; run dataset.cut_fixtures first)")
+        return
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        # A synthetic photo stands in for an operator's own backdrop here --
+        # the pipeline doesn't care what the pixels depict, only that they
+        # arrived as an uploaded photograph rather than a preset name, which
+        # is exactly the mechanism under test.
+        bg_path = pathlib.Path(td) / "my-own-venue.jpg"
+        Image.new("RGB", (1600, 2000), (210, 150, 90)).save(bg_path, quality=90)
+
+        img = Image.open(FIXTURE).convert("RGB")
+        gallery, report, warnings = list(ui.process(
+            img, str(FIXTURE), "Gown", ui._AUTO_FABRIC, "", str(bg_path),
+            ui._preset_choices()[:1], progress=_NoProgress(),
+        ))[-1]
+        assert gallery is not None and len(gallery) == 1
+        assert "✓  colour_fidelity" in report, report
 
 
 if __name__ == "__main__":

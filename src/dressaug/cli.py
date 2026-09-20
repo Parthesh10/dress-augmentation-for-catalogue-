@@ -27,16 +27,24 @@ def use_utf8_console() -> None:
             pass
 
 
-def run_one(path: Path, cfg: JobConfig, backend: str = "local_cpu", *, quiet: bool = False):
+def run_one(
+    path: Path, cfg: JobConfig, backend: str = "local_cpu", *,
+    quiet: bool = False, custom_backdrop: Path | None = None,
+):
     job_id = f"{path.stem[:24]}-{cfg.graph.value}"
     store = ArtifactStore(job_id)
     manifest = JobManifest(
         job_id=job_id, source=str(path), profile=cfg.profile,
         config={"graph": cfg.graph.value, "garment": cfg.garment.value,
-                "fabric": cfg.resolved_fabric().value, "background": cfg.background},
+                "fabric": cfg.resolved_fabric().value,
+                "background": "custom photo" if custom_backdrop else cfg.background},
     )
     ctx = Context(job_id=job_id, source_path=path, cfg=cfg, store=store, manifest=manifest)
     ctx.extra["backend"] = backend
+    if custom_backdrop is not None:
+        from PIL import Image, ImageOps
+        ctx.extra["custom_background"] = ImageOps.exif_transpose(
+            Image.open(custom_backdrop)).convert("RGB")
 
     def progress(name, i, n):
         if not quiet:
@@ -60,6 +68,9 @@ def main(argv: list[str] | None = None) -> int:
                     choices=sorted(backgrounds.PRESETS))
     ap.add_argument("--presets", default=None,
                     help="comma-separated; default is the garment portrait pair")
+    ap.add_argument("--custom-backdrop", type=Path, default=None,
+                    help="a photograph to use as the backdrop instead of --background; "
+                         "must be one you actually have the rights to use commercially")
     a = ap.parse_args(argv)
 
     cfg = JobConfig(
@@ -75,8 +86,9 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
     print(f"=== {a.path.name}  garment={cfg.garment.value} "
-          f"fabric={cfg.resolved_fabric().value} backdrop={cfg.background}")
-    m = run_one(a.path, cfg)
+          f"fabric={cfg.resolved_fabric().value} "
+          f"backdrop={a.custom_backdrop.name if a.custom_backdrop else cfg.background}")
+    m = run_one(a.path, cfg, custom_backdrop=a.custom_backdrop)
     print(f"    status={m.status}  {m.total_seconds:.1f}s")
     for g in m.gates:
         print(f"    [{'ok' if g.passed else 'FAIL'}] {g.name}: {g.detail}")
