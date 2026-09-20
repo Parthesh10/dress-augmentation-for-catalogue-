@@ -252,6 +252,14 @@ class Thresholds:
     harmonize_strength_custom: float = 0.08
     harmonize_gain_min_custom: float = 0.96
     harmonize_gain_max_custom: float = 1.04
+    #: A sharp, fully-in-focus backdrop is itself a "looks composited" cue --
+    #: real portrait photography almost always has some depth of field, with
+    #: the subject sharp and the background a little soft. Blur radius as a
+    #: fraction of the canvas's shorter side; the subject itself is never
+    #: touched, only the backdrop, before it's pasted behind. 0.02 is a light
+    #: touch on purpose -- enough to lose hard backdrop detail, not enough to
+    #: read as an obvious effect or hide the backdrop's own character.
+    background_blur_frac: float = 0.02
 
     # ---- recolouring (phase 3 and 4) ---------------------------------------
     #: A recolour must not move lightness structure, only hue and chroma.

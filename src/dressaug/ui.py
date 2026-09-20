@@ -105,6 +105,7 @@ def process(
     fabric_label: str,
     backdrop_name: str,
     custom_backdrop_path,
+    floor_frac_pct,
     preset_labels: list[str],
     progress=gr.Progress(),
 ):
@@ -152,6 +153,7 @@ def process(
         )
         if custom_backdrop is not None:
             ctx.extra["custom_background"] = custom_backdrop
+            ctx.extra["custom_floor_frac"] = float(floor_frac_pct) / 100.0
 
         steps = stages_for(cfg.graph)
         step_progress = {"ingest": 0.05, "matte": 0.15, "background": 0.55,
@@ -281,6 +283,14 @@ def build_process_tab() -> None:
                 )
                 custom_backdrop.change(
                     load_upload, [custom_backdrop], [custom_backdrop_preview])
+                floor_frac = gr.Slider(
+                    minimum=0, maximum=100, value=95, step=1,
+                    label="Where's the floor? (% down the photo)",
+                    info="Where the garment's feet should land in the photo above. "
+                         "95 = near the very bottom (a photo shot at floor level). "
+                         "Lower it for a backdrop whose own floor sits higher in "
+                         "frame — a raised porch, a table's edge, a staircase.",
+                )
             preset_defaults = _preset_choices()
             presets = gr.CheckboxGroup(
                 preset_defaults,
@@ -315,7 +325,8 @@ def build_process_tab() -> None:
 
     run_btn.click(
         process,
-        inputs=[image, upload, garment, fabric, backdrop, custom_backdrop, presets],
+        inputs=[image, upload, garment, fabric, backdrop, custom_backdrop, floor_frac,
+                presets],
         outputs=[output, report, warnings],
     )
 

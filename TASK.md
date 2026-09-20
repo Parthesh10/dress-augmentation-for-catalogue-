@@ -812,6 +812,123 @@ it; and a full real-pipeline run with a synthetic custom backdrop clears
 every gate. 70 tests total.
 ---
 
+## 1k. Depth of field, and a floor line that can be set per backdrop, 2026-09-20
+
+### What prompted it
+
+Looking at the §1j batch against real Pinterest photographs, two things
+still read as composited even on the backdrops with good colour and a
+correct shadow: a perfectly sharp, fully-in-focus background (real
+portraits almost always have some depth of field), and feet planted at a
+fixed distance from the canvas bottom regardless of where the photograph's
+own floor actually sits -- fine for a procedural preset, whose floor is
+always exactly at the bottom by construction, wrong for a photographed
+porch, table edge, or staircase whose floor can be anywhere in frame.
+
+Two fixes were proposed directly, plus an offer to suggest something
+better if there was one.
+
+### The blur -- built as asked
+
+`compose()` now softens the backdrop with a light Gaussian blur (2% of the
+canvas's shorter side by default, `Thresholds.background_blur_frac`)
+**before** pasting the subject -- the subject itself is never touched, only
+the backdrop behind it, so a sharp product stays sharp against a slightly
+soft scene, the way a shallow-depth-of-field portrait actually looks.
+Applied at `compose()` itself rather than baked into the backdrop render,
+so it scales correctly whatever resolution a given export size actually is.
+
+### The floor line -- built differently than proposed, and why
+
+The second ask was to have a model or manual labelling decide where the
+floor sits, per backdrop, so a 500-photo batch comes out grounded. Before
+building either: prototyped a plain automatic detector (the strongest
+roughly-horizontal edge in the lower part of the frame) and ran it against
+all 33 real photographs from the shared board. **It is not reliable enough
+to trust unattended.** It found *a* line in nearly every photograph,
+including the abstract skull painting (a false "floor" from paint texture),
+the galaxy-over-sea photo (the sea's own horizon, not a floor), and the
+macro flower close-up (an edge with no floor concept behind it at all) --
+with no way, from pixels alone, to tell those apart from a real floor.
+Shipping that would have looked *more* consistently wrong at 500-photo
+scale than the fixed default it would have replaced, not less.
+
+**What generalises safely is a number, not a detector.** `place()` now
+takes an optional `floor_frac` -- where the feet should land, as a fraction
+of canvas height -- and when it's given, the fill/scale calculation treats
+only the space *above* that line as available to fill against, rather than
+fighting a figure already sized for the full canvas against a line partway
+up it (a real bug caught by the first test written for this: a figure
+sized to fill 88% of the whole frame had no room left to also land its
+feet at 50%, and silently landed at the bottom instead). This is a value
+supplied **once per backdrop photograph**, not once per garment -- the only
+reason a 500-photo batch is a few minutes of one-time review rather than
+500 individual judgement calls, because the number is a property of the
+backdrop, unchanged by whichever garment gets composited onto it.
+
+Wired through the UI (a slider next to the custom-backdrop upload, "where's
+the floor", defaulting to 95%) and the CLI (`--floor-frac`).
+
+### The actual review, done once, against the real 33
+
+Went back through the same 33 photographs from §1j by eye, this time
+scoring where the floor sits on each (a gridded reference sheet made this
+fast, not 33 separate judgement calls). The honest finding: **most
+photographs with a real floor already sat close to the previous fixed
+default** (0.85-0.93 versus the old fixed 0.95) -- floor-line tuning is a
+real but secondary improvement. **The bigger lever is exclusion.** Four of
+the 33 have no floor concept at all regardless of any tuning -- the
+abstract painting, the galaxy/sea-horizon photo, the macro flower
+close-up, and a stock-photo-pack's own promotional thumbnail -- and two
+more (a wedding table, a wedding reception's own round tables) are
+table-height scenes with no standing-figure floor in them. All six are
+excluded from the curated batch below rather than forced through with a
+tuned number that couldn't fix what the photograph itself doesn't show.
+(A flat solid-colour swatch also on the board was kept in, at the ordinary
+default -- a flat colour needs no floor line at all, the same as several
+of the all-over foliage/texture backdrops.)
+
+Re-rendered `IMG_8364` against the **27** backdrops that survived
+curation (33 minus the 6 excluded above), with both the new blur and each
+photograph's own reviewed floor line: **27 of 27 passed every gate**, dE2000
+between 0.09 and 1.60 against the 3.0 budget -- comparable to §1j's
+uncurated run, because curation removed photographs rather than changing
+how any of them are scored, and floor-line tuning doesn't touch colour at
+all. Contact sheet in `work-reports/pin-backdrop-batch-2026-09-20-curated/`.
+Looked at directly, not just measured: the blur is the more visible change
+of the two by far -- every one of the 27 now reads as a real shallow-depth-
+of-field portrait rather than a sharp cutout pasted onto an equally sharp
+photograph, which was the single biggest "this is obviously edited" cue
+left standing after §1h and §1j.
+
+**3 new tests**: the composited backdrop is measurably softer than the
+input on a high-frequency checkerboard, while the subject's own colour
+fidelity gate is untouched; `floor_frac` actually overrides the default
+margin (caught the fill/scale bug above in the process); and `floor_frac=
+None` reproduces the exact previous behaviour bit-for-bit, so every
+procedural preset and every custom backdrop without a reviewed line renders
+exactly as it did before this feature existed. 73 tests total.
+
+### What this does not claim
+
+The floor-line number is a judgement call, not a measurement -- exactly
+like `infer_key_direction` (§1j) already admits about lighting, this admits
+about grounding. It was set once, by eye, against 33 photographs already in
+hand; a genuinely new, differently-shaped backdrop photograph would need
+the same five minutes of review before its own number could be trusted,
+and there is no shortcut here that skips that -- the finding above is
+specifically that trying to skip it produces *worse*, more confidently
+wrong results at scale than simply doing the review.
+
+It also can't fix a pose that never touched the ground in the original
+photograph. `IMG_8364`, the garment used for every render in this section,
+is a mid-jump dance shot -- no floor_frac places its feet convincingly,
+because there genuinely is no ground contact in the source photograph to
+place. That is the correct, honest outcome, not a bug: the same photograph
+composited onto a calmer, standing-pose garment shows the floor-line fix
+doing real work, as the §1i/§1j photographs already did.
+---
+
 ## 2. What was inherited, and why
 
 | Taken | From | Why |

@@ -274,6 +274,41 @@ def test_compose_and_export_thread_the_backdrops_own_key_direction():
     assert src.count('ctx.extra.get("key_direction"') == 2
 
 
+def test_compose_softens_a_sharp_backdrop_but_never_the_subject():
+    """2026-09-20: a perfectly crisp backdrop is itself a "this is
+    composited" cue, independent of colour or grounding -- real portrait
+    photography has some depth of field. Checked on a high-frequency
+    checkerboard backdrop, away from where the subject lands: the composited
+    result must be measurably softer than the untouched input at the same
+    pixels. The subject's own pixels are a different check entirely
+    (`test_the_matte_stage_wires_decontamination_in` and the colour-fidelity
+    gate already guard those) -- this test only claims the backdrop softened,
+    not that the product did."""
+    size = (300, 450)
+    checker = np.zeros((size[1], size[0]), np.uint8)
+    checker[::2, ::2] = 255
+    checker[1::2, 1::2] = 255
+    bg = Image.fromarray(np.stack([checker] * 3, axis=-1), "RGB")
+
+    a_res = _standing_alpha()
+    product = Image.new("RGB", a_res.shape[::-1], (128, 128, 128))
+    out, scene_alpha = stages.compose(bg, product, a_res)
+
+    # A strip along the very top of the frame -- well clear of the standing
+    # figure's own placement -- to isolate the backdrop's own sharpness.
+    out_strip = np.asarray(out, np.float32)[:20, :, 0]
+    bg_strip = np.asarray(bg, np.float32)[:20, :, 0]
+    # High-frequency checker energy: mean absolute difference between
+    # adjacent pixels. Blur collapses this toward zero; an unmodified copy
+    # would keep it near 255.
+    out_energy = np.abs(np.diff(out_strip, axis=1)).mean()
+    bg_energy = np.abs(np.diff(bg_strip, axis=1)).mean()
+    assert out_energy < bg_energy * 0.5, (
+        f"expected the composited backdrop to be visibly softer, got "
+        f"out_energy={out_energy:.1f} vs bg_energy={bg_energy:.1f}"
+    )
+
+
 # --------------------------------------------------------------- harmonize
 
 
@@ -491,6 +526,40 @@ def test_a_standing_figure_is_anchored_near_the_bottom_not_centred():
     )
     expected_bottom = int(size[1] * THRESHOLDS.bottom_margin)
     assert abs(bottom_gap - expected_bottom) <= 1, (bottom_gap, expected_bottom)
+
+
+def test_floor_frac_overrides_the_default_bottom_margin():
+    """2026-09-20: a photographed backdrop's own floor can sit anywhere in
+    frame -- a table's edge, a raised porch -- not just at the canvas
+    bottom the way every procedural preset's floor does. `floor_frac` plants
+    the subject's own feet at a specific line instead of the fixed default
+    margin."""
+    size = (400, 600)
+    alpha = np.zeros((size[1], size[0]), np.float32)
+    alpha[40:560, 150:250] = 1.0
+    product = Image.new("RGB", size, (120, 60, 90))
+
+    p_res, a_res, ox, oy = stages.place(alpha, product, size, floor_frac=0.5)
+    feet_y = oy + p_res.size[1]
+    assert abs(feet_y - size[1] * 0.5) <= 2, (
+        f"expected the feet at y={size[1] * 0.5:.0f} (50% down the frame), "
+        f"got {feet_y}"
+    )
+
+
+def test_floor_frac_of_none_keeps_the_ordinary_bottom_margin_behaviour():
+    """Every procedural preset, and any custom backdrop without an assigned
+    floor line, must render exactly as before this feature existed --
+    `floor_frac=None` is not just "close to the default", it is the
+    default."""
+    size = (400, 600)
+    alpha = np.zeros((size[1], size[0]), np.float32)
+    alpha[40:560, 150:250] = 1.0
+    product = Image.new("RGB", size, (120, 60, 90))
+
+    with_none = stages.place(alpha, product, size, floor_frac=None)
+    without_arg = stages.place(alpha, product, size)
+    assert with_none[2:] == without_arg[2:]  # same (ox, oy)
 
 
 def test_an_empty_matte_is_refused_rather_than_composited():

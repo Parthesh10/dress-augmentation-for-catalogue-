@@ -30,6 +30,7 @@ def use_utf8_console() -> None:
 def run_one(
     path: Path, cfg: JobConfig, backend: str = "local_cpu", *,
     quiet: bool = False, custom_backdrop: Path | None = None,
+    floor_frac: float | None = None,
 ):
     job_id = f"{path.stem[:24]}-{cfg.graph.value}"
     store = ArtifactStore(job_id)
@@ -45,6 +46,8 @@ def run_one(
         from PIL import Image, ImageOps
         ctx.extra["custom_background"] = ImageOps.exif_transpose(
             Image.open(custom_backdrop)).convert("RGB")
+        if floor_frac is not None:
+            ctx.extra["custom_floor_frac"] = floor_frac
 
     def progress(name, i, n):
         if not quiet:
@@ -71,6 +74,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--custom-backdrop", type=Path, default=None,
                     help="a photograph to use as the backdrop instead of --background; "
                          "must be one you actually have the rights to use commercially")
+    ap.add_argument("--floor-frac", type=float, default=None,
+                    help="with --custom-backdrop: where the feet should land, as a "
+                         "fraction of the photo's height from the top (e.g. 0.95 for "
+                         "near the bottom). Set once per backdrop photo, by eye; "
+                         "reused for every garment composited onto it")
     a = ap.parse_args(argv)
 
     cfg = JobConfig(
@@ -88,7 +96,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"=== {a.path.name}  garment={cfg.garment.value} "
           f"fabric={cfg.resolved_fabric().value} "
           f"backdrop={a.custom_backdrop.name if a.custom_backdrop else cfg.background}")
-    m = run_one(a.path, cfg, custom_backdrop=a.custom_backdrop)
+    m = run_one(a.path, cfg, custom_backdrop=a.custom_backdrop, floor_frac=a.floor_frac)
     print(f"    status={m.status}  {m.total_seconds:.1f}s")
     for g in m.gates:
         print(f"    [{'ok' if g.passed else 'FAIL'}] {g.name}: {g.detail}")

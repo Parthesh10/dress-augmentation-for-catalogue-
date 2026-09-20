@@ -272,7 +272,10 @@ def background(ctx: Context) -> Context:
 # ---------------------------------------------------------------- composite
 
 
-def place(alpha: np.ndarray, product: Image.Image, size: tuple[int, int]):
+def place(
+    alpha: np.ndarray, product: Image.Image, size: tuple[int, int],
+    floor_frac: float | None = None,
+):
     """Scale the garment to fill the frame vertically, bounded by width.
 
     Bounded by **both**, and that is a bug inherited as a lesson rather than
@@ -288,6 +291,22 @@ def place(alpha: np.ndarray, product: Image.Image, size: tuple[int, int]):
     vertical slack is left after scaling now goes almost entirely above the
     subject as headroom, with only a small margin held below -- see
     `THRESHOLDS.bottom_margin`.
+
+    `floor_frac`, added 2026-09-20, overrides that fixed bottom margin with
+    a specific line (as a fraction of canvas height) to plant the feet on
+    instead. Every procedural preset's own floor is exactly at the canvas
+    bottom, which is why they never needed this -- but a photographed
+    backdrop's own floor can sit anywhere in frame (a table's edge, a raised
+    porch, partway up a staircase), and no version of "how far above the
+    bottom edge" is right for all of them. Deliberately **not** guessed
+    automatically: a prototype edge-detector found *a* line in nearly every
+    photograph tried, including a sea horizon and a framed painting with no
+    floor in it at all, with no reliable way to tell those apart from a real
+    one on pixels alone. This takes a number instead -- supplied once per
+    backdrop photograph, not once per garment, which is the only reason
+    "verified on 500 photographs" is a small amount of work rather than a
+    large one: the number is a property of the backdrop, reused unchanged
+    across every garment composited onto it.
     """
     cw, ch = size
     ys, xs = np.nonzero(alpha > THRESHOLDS.alpha_floor)
@@ -299,7 +318,15 @@ def place(alpha: np.ndarray, product: Image.Image, size: tuple[int, int]):
     bw, bh = crop_p.size
 
     fill = THRESHOLDS.garment_fill
-    scale = min(ch * fill / bh, cw * fill / bw)
+    # The vertical space actually available to fill against -- the whole
+    # canvas ordinarily, but only down to the requested line when
+    # `floor_frac` is set. Without this, a figure sized to fill 88% of the
+    # *whole* canvas has no room left to also have its feet land partway
+    # down the frame -- the two numbers would fight, and the fixed-size
+    # figure would win, silently ignoring floor_frac whenever it asked for
+    # less than the full canvas.
+    ch_avail = ch * floor_frac if floor_frac is not None else ch
+    scale = min(ch_avail * fill / bh, cw * fill / bw)
     nw, nh = max(int(bw * scale), 8), max(int(bh * scale), 8)
 
     p_res = crop_p.resize((nw, nh), Image.LANCZOS)
@@ -310,8 +337,12 @@ def place(alpha: np.ndarray, product: Image.Image, size: tuple[int, int]):
     ) / 255.0
 
     ox = int(cw / 2 - nw / 2)
-    bottom_margin = int(ch * THRESHOLDS.bottom_margin)
-    oy = max(ch - nh - bottom_margin, 0)
+    if floor_frac is not None:
+        oy = int(np.clip(floor_frac, 0.0, 1.0) * ch) - nh
+    else:
+        bottom_margin = int(ch * THRESHOLDS.bottom_margin)
+        oy = ch - nh - bottom_margin
+    oy = max(oy, 0)
     return p_res, a_res, ox, oy
 
 
@@ -441,6 +472,7 @@ def compose(
     key_dir: tuple[float, float] = (-0.25, -0.45),
     *,
     custom_backdrop: bool = False,
+    floor_frac: float | None = None,
 ):
     """Alpha-composite in linear light. Fractional alpha is honoured exactly.
 
@@ -451,8 +483,17 @@ def compose(
     shadow only ever shows where there is no subject, which is exactly the
     area it exists to describe.
     """
-    p_res, a_res, ox, oy = place(alpha, product, bg.size)
-    bg_srgb = _arr(bg)
+    p_res, a_res, ox, oy = place(alpha, product, bg.size, floor_frac)
+
+    # A soft backdrop, sharp subject -- real depth of field, and the reason
+    # a perfectly crisp background reads as composited even with correct
+    # colour and a correct shadow. Blurred once here, not baked into the
+    # backdrop render itself, so it scales with whatever resolution this
+    # particular export actually is (`export` calls `compose` once per
+    # preset size) rather than being blurred relative to a size it isn't.
+    blur_px = int(min(bg.size) * THRESHOLDS.background_blur_frac)
+    bg_soft = bg.filter(ImageFilter.GaussianBlur(blur_px)) if blur_px > 0 else bg
+    bg_srgb = _arr(bg_soft)
     canvas = srgb_to_linear(bg_srgb)
 
     shadow = contact_shadow(bg.size, a_res, ox, oy, key_dir)
@@ -475,7 +516,8 @@ def composite(ctx: Context) -> Context:
     key_dir = ctx.extra.get("key_direction", (-0.25, -0.45))
     is_custom = ctx.extra.get("custom_background") is not None
     out, scene_alpha = compose(
-        ctx.background, ctx.product, ctx.alpha, key_dir, custom_backdrop=is_custom)
+        ctx.background, ctx.product, ctx.alpha, key_dir, custom_backdrop=is_custom,
+        floor_frac=ctx.extra.get("custom_floor_frac"))
     ctx.composited = out
     ctx.composited_alpha = scene_alpha
     ctx.store.image("composite", "result", out)
@@ -545,7 +587,8 @@ def export(ctx: Context) -> Context:
             else backgrounds.render(backdrop, (preset.width, preset.height), seed=seed)
         )
         out, _ = compose(
-            canvas, ctx.product, ctx.alpha, key_dir, custom_backdrop=custom is not None)
+            canvas, ctx.product, ctx.alpha, key_dir, custom_backdrop=custom is not None,
+            floor_frac=ctx.extra.get("custom_floor_frac"))
         path = OUT_DIR / f"{stem}--{name}.jpg"
         out.save(path, "JPEG", quality=preset.quality, subsampling=1, optimize=True)
         ctx.exports[name] = str(path)

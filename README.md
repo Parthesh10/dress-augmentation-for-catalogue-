@@ -41,7 +41,7 @@ dominated by process/model-load overhead (~80-90s either way for a single
 photo) -- the GPU's win compounds across a batch, not a single image. See
 [TASK.md §1i](TASK.md).
 
-**70 tests, one command:** `.venv\Scripts\python.exe tests\run_all.py`
+**73 tests, one command:** `.venv\Scripts\python.exe tests\run_all.py`
 
 ---
 
@@ -133,6 +133,25 @@ shop's own photographs** — [TASK.md §5](TASK.md) says what a useful first set
 looks like.
 
 ---
+
+## Depth of field and a per-backdrop floor line, 2026-09-20
+
+Two fixes for the same complaint on real photographed backdrops: feet
+looking planted in the air. `compose()` now softens the backdrop with a
+light, subject-untouched blur before pasting -- real portraits have some
+depth of field, and a perfectly sharp background was itself a "this is
+composited" cue independent of colour or shadow. `place()` now takes an
+optional `floor_frac`, so a photographed backdrop's own floor -- which can
+sit anywhere in frame, unlike a procedural preset's -- can be set once per
+backdrop (a UI slider, or `--floor-frac` on the CLI) and reused for every
+garment composited onto it.
+
+An automatic floor-line detector was prototyped and rejected: it couldn't
+tell a real floor from a sea horizon or a painting's own brush strokes,
+and shipping it would have been more confidently wrong at scale than
+useful. Re-ran the curated real-photo batch below with both fixes: 27/27
+still pass every gate, and the blur alone visibly closes most of the
+remaining "looks edited" gap. Full account in [TASK.md §1k](TASK.md).
 
 ## Custom backdrop photos, 2026-09-20
 
