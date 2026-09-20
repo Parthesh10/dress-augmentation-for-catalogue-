@@ -465,6 +465,59 @@ def harmonize_gain(
     return np.clip(gain, gmin, gmax).astype(np.float32)
 
 
+def soften_backdrop(bg: Image.Image, contact_y: float | None = None) -> Image.Image:
+    """Depth of field for the backdrop: a light blur everywhere, ramping to
+    a stronger one below the subject's feet toward the bottom edge.
+
+    Two blurs blended by a per-row weight, not one blur with a spatially
+    varying radius -- PIL has no such filter, and the blend gives the same
+    visible result for a fraction of the cost.
+
+    **A ramp toward the bottom edge, not a band centred on the feet** --
+    changed after looking at the first version on real photographs. A band
+    peaked at the contact line put a visible horizontal stripe of heavier
+    blur across a floor's boards or a lawn's grass, right below the feet: it
+    replaced one "this is edited" cue with another. It was also physically
+    backwards. Depth of field falls off with distance from the focal plane,
+    and the floor at the subject's own contact line is at the subject's
+    distance -- it should be close to sharp. What goes soft in a real
+    photograph is the *foreground*, the floor between the subject and the
+    camera, which sits at the bottom of the frame. So the weight is 0 at the
+    contact line and rises smoothly (a smoothstep) to 1 at the bottom edge:
+    a monotonic gradient the eye reads as foreground blur, with no seam.
+
+    With no `contact_y` (nothing was placed), only the light overall blur
+    applies. All radii are fractions of the canvas's shorter side, so the
+    same setting reads the same at every export size.
+    """
+    T = THRESHOLDS
+    short = min(bg.size)
+    base_px = int(short * T.background_blur_frac)
+    base = bg.filter(ImageFilter.GaussianBlur(base_px)) if base_px > 0 else bg
+    if contact_y is None:
+        return base
+
+    foot_px = int(short * T.foot_blur_frac)
+    if foot_px <= base_px:
+        return base
+    heavy = bg.filter(ImageFilter.GaussianBlur(foot_px))
+
+    h = bg.size[1]
+    cy = float(np.clip(contact_y, 0, h - 1))
+    span = max(h - cy, 1.0)
+    yy = np.arange(h, dtype=np.float32)
+    t = np.clip((yy - cy) / span, 0.0, 1.0)
+    weight = (t * t * (3.0 - 2.0 * t))[:, None, None]  # smoothstep: 0 at feet, 1 at edge
+    base_arr = np.asarray(base, np.float32)
+    heavy_arr = np.asarray(heavy, np.float32)
+    out = base_arr * (1.0 - weight) + heavy_arr * weight
+    # rint, not a bare astype: the blend of two identical values lands on
+    # e.g. 119.99999 in float32, and astype truncates that to 119 -- a
+    # one-level dither across the whole backdrop, caught by the flat-field
+    # test rather than assumed away.
+    return Image.fromarray(np.clip(np.rint(out), 0, 255).astype(np.uint8), "RGB")
+
+
 def compose(
     bg: Image.Image,
     product: Image.Image,
@@ -487,13 +540,13 @@ def compose(
 
     # A soft backdrop, sharp subject -- real depth of field, and the reason
     # a perfectly crisp background reads as composited even with correct
-    # colour and a correct shadow. Blurred once here, not baked into the
+    # colour and a correct shadow. Blurred here, not baked into the
     # backdrop render itself, so it scales with whatever resolution this
     # particular export actually is (`export` calls `compose` once per
     # preset size) rather than being blurred relative to a size it isn't.
-    blur_px = int(min(bg.size) * THRESHOLDS.background_blur_frac)
-    bg_soft = bg.filter(ImageFilter.GaussianBlur(blur_px)) if blur_px > 0 else bg
-    bg_srgb = _arr(bg_soft)
+    # Graduated: light everywhere, stronger in a band at the feet -- see
+    # `soften_backdrop`.
+    bg_srgb = _arr(soften_backdrop(bg, contact_y=oy + a_res.shape[0]))
     canvas = srgb_to_linear(bg_srgb)
 
     shadow = contact_shadow(bg.size, a_res, ox, oy, key_dir)

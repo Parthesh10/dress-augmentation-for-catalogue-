@@ -256,10 +256,27 @@ class Thresholds:
     #: real portrait photography almost always has some depth of field, with
     #: the subject sharp and the background a little soft. Blur radius as a
     #: fraction of the canvas's shorter side; the subject itself is never
-    #: touched, only the backdrop, before it's pasted behind. 0.02 is a light
-    #: touch on purpose -- enough to lose hard backdrop detail, not enough to
-    #: read as an obvious effect or hide the backdrop's own character.
-    background_blur_frac: float = 0.02
+    #: touched, only the backdrop, before it's pasted behind.
+    #:
+    #: **Recalibrated 2026-09-20 after the first value was reported as far
+    #: too heavy** ("removing the background entirely"). The first value,
+    #: 0.02, mapped to a ~24px Gaussian radius on a 1200px canvas -- looked
+    #: at against a strip of radii on a real photograph, that is the point
+    #: where a room's plants and floorboards dissolve into colour fields.
+    #: 2-4px on a 600px side (0.4%) is where it reads as depth of field
+    #: while every object stays recognisable. That is the target here.
+    background_blur_frac: float = 0.004
+    #: A second, stronger blur the backdrop ramps toward *below* the
+    #: subject's feet, reaching full strength at the bottom edge of the
+    #: frame -- foreground depth of field, the floor between the subject
+    #: and the camera going soft. Asked for as "more blur near the feet";
+    #: built as a ramp to the edge rather than a band at the feet after
+    #: the band version put a visible stripe across floorboards and grass
+    #: (see `stages.soften_backdrop`). Radius as a fraction of the shorter
+    #: side. The contact line itself stays at the light overall blur, which
+    #: is also what a real photograph does: the floor at the subject's own
+    #: distance is in focus with the subject.
+    foot_blur_frac: float = 0.015
 
     # ---- recolouring (phase 3 and 4) ---------------------------------------
     #: A recolour must not move lightness structure, only hue and chroma.

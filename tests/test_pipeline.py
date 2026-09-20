@@ -303,10 +303,69 @@ def test_compose_softens_a_sharp_backdrop_but_never_the_subject():
     # would keep it near 255.
     out_energy = np.abs(np.diff(out_strip, axis=1)).mean()
     bg_energy = np.abs(np.diff(bg_strip, axis=1)).mean()
-    assert out_energy < bg_energy * 0.5, (
-        f"expected the composited backdrop to be visibly softer, got "
+    assert out_energy < bg_energy * 0.9, (
+        f"expected the composited backdrop to be softer, got "
         f"out_energy={out_energy:.1f} vs bg_energy={bg_energy:.1f}"
     )
+
+
+def test_the_backdrop_ramps_softer_toward_the_bottom_edge_below_the_feet():
+    """Recalibrated 2026-09-20 after the first uniform blur was reported as
+    far too heavy ("removing the background entirely"), then reshaped
+    again after a band centred on the feet showed a visible stripe across
+    real floorboards and grass. The shape that survived looking at it:
+    sharp-ish at the contact line (the floor at the subject's own distance
+    is in focus with the subject), ramping softer toward the bottom edge
+    (foreground blur). Three strips of the same stripe field, in the same
+    call: top, contact line, bottom edge -- and the ordering between them
+    is the whole claim. Measured on `soften_backdrop` directly with a known
+    contact line, not through `compose`, so the subject's own pixels can't
+    confound the reading."""
+    size = (300, 450)
+    # 6px-wide vertical stripes, not a 1px checkerboard: a 1px checker is
+    # fully erased by even the lightest blur, leaving every region at ~zero
+    # energy with nothing left to compare (an earlier version of this test
+    # did exactly that and read 0.9 vs 1.1 -- a floor effect, not a
+    # measurement). Stripes this wide survive the light overall blur nearly
+    # intact and are clearly softened by the stronger one.
+    xs = np.arange(size[0])
+    stripes = ((xs // 6) % 2 * 255).astype(np.uint8)
+    field = np.tile(stripes, (size[1], 1))
+    bg = Image.fromarray(np.stack([field] * 3, axis=-1), "RGB")
+
+    contact_y = 300
+    out = np.asarray(stages.soften_backdrop(bg, contact_y=contact_y), np.float32)[..., 0]
+
+    def energy(rows):
+        return float(np.abs(np.diff(rows, axis=1)).mean())
+
+    top = energy(out[:20])
+    at_feet = energy(out[contact_y - 10:contact_y + 10])
+    bottom = energy(out[-20:])
+    # The contact line should be no softer than the top -- it gets only the
+    # light overall blur, same as the top does.
+    assert abs(at_feet - top) < top * 0.15, (
+        f"the contact line should match the light overall blur, got "
+        f"feet={at_feet:.1f} vs top={top:.1f}"
+    )
+    # And the bottom edge should be clearly softer than both.
+    assert bottom < at_feet * 0.7, (
+        f"expected the bottom edge to be clearly softer than the contact "
+        f"line, got bottom={bottom:.1f} vs feet={at_feet:.1f}"
+    )
+
+
+def test_soften_backdrop_is_only_the_light_blur_with_no_contact_line():
+    """No placed subject means no feet band -- only the overall softening,
+    so a caller that just wants the depth-of-field look with nothing placed
+    gets exactly that and nothing extra."""
+    bg = Image.new("RGB", (300, 450), (120, 120, 120))
+    a = np.asarray(stages.soften_backdrop(bg, contact_y=None), np.float32)
+    b = np.asarray(stages.soften_backdrop(bg, contact_y=400), np.float32)
+    # On a flat field both are identical -- there's nothing to blur -- which
+    # is exactly the invariant: the band must never *add* anything on its
+    # own, only soften what's already there.
+    assert np.abs(a - b).max() < 1.0
 
 
 # --------------------------------------------------------------- harmonize
