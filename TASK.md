@@ -637,6 +637,104 @@ options if the CUDA upgrade is ever worth taking on. This is the free,
 zero-new-dependency step that was actually available today.
 ---
 
+## 1i. Matting runs on the GPU now, measured before being trusted, 2026-09-20
+
+### What was asked, and what it followed on from
+
+§1h checked for a free connector (none) and for open-source models
+(Harmonizer, IC-Light) to push realism further, and found both blocked on
+the same thing: this machine's GPU was real (a GTX 1650) but unusable,
+because the torch interpreter this project shares with the sibling
+jewellery project for matting was a CPU-only build. Told directly to enable
+CUDA as well, and not to ask before continuing further engineering work.
+
+### What was actually sitting on the machine already
+
+Before installing anything: found a `.venv-cuda` already present in the
+sibling project's own folder, next to a `cuda-test/` directory holding
+blank output frames dated 2026-08-11. That is almost certainly where this
+project's existing "fp16 is not offered" lesson (`backends.py`'s docstring,
+inherited from the sibling) actually came from — BiRefNet's Swin backbone
+returning an all-NaN alpha in half precision is a numerical property of the
+model, not of which processor runs it, and a blank frame is exactly what an
+all-NaN alpha renders as. `.venv-cuda` itself was never wired into any
+pipeline; `torch.cuda.is_available()` on it returns `True` against this
+GPU. No install was needed — only a decision to actually point production
+at what was already there, in fp32, having learned from the evidence
+already on disk not to repeat the fp16 attempt.
+
+### Measured before being trusted, not assumed
+
+Two real risks, both checked with numbers rather than assumed away, using
+the same real photograph (`data/ethnic-fixtures/06-sarees-red.jpg`) already
+used to verify the harmonisation fix in §1h:
+
+1. **Does GPU output actually agree with CPU output?** Ran the identical
+   matting worker on both interpreters and diffed the resulting alphas
+   pixel-for-pixel: mean absolute difference 2.9×10⁻⁸, maximum 0.0039 —
+   inside a single 8-bit quantisation step, i.e. floating-point noise
+   between BLAS backends, not a real disagreement. Coverage (the fraction
+   of pixels counted as product) was bit-identical.
+2. **Does it actually fit in 4GB?** Measured peak VRAM allocation on a full
+   frame at this project's `infer_size` (1024): **3.35GB allocated against
+   a 4GB card with roughly 3.4GB actually free** after the OS's own usage.
+   That is tight — tight enough that a fallback is not caution for its own
+   sake, so the worker script itself catches a CUDA out-of-memory error,
+   clears the cache, and retries the same forward pass on CPU rather than
+   failing the job. A regression test (`test_backends.py`) checks the
+   worker's generated source actually contains that catch-and-retry, and
+   that it re-raises anything that is *not* an out-of-memory error rather
+   than silently swallowing a real bug.
+
+### What changed, and what didn't
+
+`backends.INTERPRETER` now prefers `.venv-cuda` over `.venv-birefnet`
+(falling back to the latter if the CUDA venv is ever absent) — the worker
+script is the *same file* either way, detecting CUDA at runtime, so this is
+one code path with two possible interpreters behind it, not two code paths
+to maintain. `LocalCpuMatting` keeps its name and its `"local_cpu"`
+identifier unchanged: every caller, config, and test already spells the
+backend that way, and what it actually promises — runs on this machine, not
+a cloud API — never changed. A new `last_device` attribute records which
+device actually answered ("cuda", "cpu", or the OOM-fallback string),
+threaded into `ctx.extra["matting_device"]` the same way `matte_coverage`
+already is, so a real job's own report says which path it took rather than
+leaving that invisible.
+
+**Re-ran the real pipeline through the actual production `stages.matte()`
+call, not a standalone script**, on the same photograph as §1h's largest
+harmonisation case: `matting_device` read `cuda`, and the resulting
+`colour_fidelity` dE2000 (1.78) and every other gate matched the CPU run
+exactly — the GPU path changes nothing about the output, only how it gets
+there.
+
+**5 new tests** in a new `test_backends.py`: the CUDA interpreter is
+preferred when present (with a real assertion on the fallback path too, not
+only the happy path); the worker's generated source never contains `.half(`
+or `autocast` outside its own comments explaining why not; the OOM
+catch-and-retry exists and re-raises anything else; the model is still
+pinned to a full 40-character revision SHA, not a short one; and
+`last_device` starts `None` rather than a guessed default. 61 tests total.
+
+### What this does not claim
+
+**Per-image wall time barely moved** for a single photograph — 84-92s
+either way, because a new Python subprocess spawns per call and importing
+torch plus loading the model (~15-25s) dwarfs the inference itself for one
+image. What actually changed is the inference portion alone: ~11s on CUDA
+against ~32s on CPU on the same photograph, a real ~3× difference that
+mostly disappears into fixed per-call overhead at batch-of-one but would
+add up across a real catalog run of many photographs, since that per-image
+saving repeats every time while the process-spawn cost does not compound
+in the same way it would if amortised. **The natural next optimisation is a
+persistent worker** that loads the model once and matters many images
+through it, rather than spawning a fresh interpreter and reloading the
+model per photograph — not built here, because it is a real architecture
+change (subprocess lifecycle, an IPC protocol, error recovery across many
+jobs rather than one) that deserves its own careful pass rather than being
+folded into this one, not because it isn't worth doing.
+---
+
 ## 2. What was inherited, and why
 
 | Taken | From | Why |

@@ -30,10 +30,18 @@ A stage belonging to an unbuilt phase **raises** rather than passing through,
 so a run can never look more finished than it is.
 
 **Verified 2026-09-11** — one garment across four backdrops, all gates passed,
-ΔE2000 between 0.16 and 0.20 against a 3.0 budget. Roughly 50-75 s per image
-on CPU. Comparison sheet in `work-reports/phase1-2/`.
+ΔE2000 between 0.16 and 0.20 against a 3.0 budget. Comparison sheet in
+`work-reports/phase1-2/`.
 
-**56 tests, one command:** `.venv\Scripts\python.exe tests\run_all.py`
+**Matting now prefers the GPU when one's available** (2026-09-20) — the
+inference itself runs roughly 3x faster on this machine's GPU than on CPU
+(~11s vs ~32s on a real photograph), with an automatic fallback to CPU if
+the GPU ever runs out of memory mid-job. Per-image wall time is still
+dominated by process/model-load overhead (~80-90s either way for a single
+photo) -- the GPU's win compounds across a batch, not a single image. See
+[TASK.md §1i](TASK.md).
+
+**61 tests, one command:** `.venv\Scripts\python.exe tests\run_all.py`
 
 ---
 
@@ -125,6 +133,24 @@ shop's own photographs** — [TASK.md §5](TASK.md) says what a useful first set
 looks like.
 
 ---
+
+## Matting on the GPU, measured before being trusted, 2026-09-20
+
+Told to enable CUDA (§1h had found a GPU on this machine going unused) and
+not to ask before continuing further work. Found a `.venv-cuda` already
+sitting in the sibling project's folder, next to blank test frames from
+2026-08-11 that are very likely the actual origin of this project's
+existing "no fp16" rule -- never wired into any pipeline. No install
+needed, just a decision to point production at what was already there, in
+fp32.
+
+**Measured, not assumed:** GPU and CPU output diffed pixel-for-pixel on a
+real photograph (max difference 0.0039, within one 8-bit quantisation
+step); peak VRAM use on a full frame measured at 3.35GB against a 4GB card
+with ~3.4GB actually free -- tight enough that the worker script itself now
+catches a CUDA out-of-memory error and retries on CPU rather than failing
+the job. Full account, including why per-image wall time barely moved even
+though inference itself is ~3x faster, in [TASK.md §1i](TASK.md).
 
 ## Lighting harmonisation, no new dependency, 2026-09-19
 

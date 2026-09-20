@@ -155,6 +155,8 @@ def matte(ctx: Context) -> Context:
     partial = partial_alpha_fraction(alpha)
     ctx.extra["matte_coverage"] = round(coverage, 4)
     ctx.extra["partial_alpha_fraction"] = round(partial, 4)
+    if getattr(backend, "last_device", None):
+        ctx.extra["matting_device"] = backend.last_device
 
     if coverage < 0.01:
         ctx.warn(f"matte found almost no garment ({coverage:.1%} of the frame)")
