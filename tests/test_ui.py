@@ -111,7 +111,7 @@ def test_the_app_builds_without_error():
 
 def test_missing_image_is_refused_without_running_the_pipeline():
     result = list(ui.process(
-        None, None, "Gown", ui._AUTO_FABRIC, "studio_ivory", None, False, 88, 50, 95, 100,
+        None, None, "Gown", ui._AUTO_FABRIC, "studio_ivory", None, False, 88, 50, 95, 100, -25, 100, 100,
         ui._preset_choices()[:1], progress=_NoProgress(),
     ))[-1]
     assert result[0] is None
@@ -121,7 +121,7 @@ def test_missing_image_is_refused_without_running_the_pipeline():
 def test_missing_backdrop_is_refused():
     img = Image.new("RGB", (80, 80), (180, 140, 140))
     result = list(ui.process(
-        img, None, "Gown", ui._AUTO_FABRIC, "", None, False, 88, 50, 95, 100,
+        img, None, "Gown", ui._AUTO_FABRIC, "", None, False, 88, 50, 95, 100, -25, 100, 100,
         ui._preset_choices()[:1], progress=_NoProgress(),
     ))[-1]
     assert result[0] is None
@@ -131,7 +131,7 @@ def test_missing_backdrop_is_refused():
 def test_missing_presets_is_refused():
     img = Image.new("RGB", (80, 80), (180, 140, 140))
     result = list(ui.process(
-        img, None, "Gown", ui._AUTO_FABRIC, "studio_ivory", None, False, 88, 50, 95, 100, [],
+        img, None, "Gown", ui._AUTO_FABRIC, "studio_ivory", None, False, 88, 50, 95, 100, -25, 100, 100, [],
         progress=_NoProgress(),
     ))[-1]
     assert result[0] is None
@@ -147,7 +147,7 @@ def test_a_custom_backdrop_photo_bypasses_the_missing_backdrop_refusal():
     exactly what this test is checking."""
     img = Image.new("RGB", (80, 80), (180, 140, 140))
     result = list(ui.process(
-        img, None, "Gown", ui._AUTO_FABRIC, "", str(FIXTURE), False, 88, 50, 95, 100, [],
+        img, None, "Gown", ui._AUTO_FABRIC, "", str(FIXTURE), False, 88, 50, 95, 100, -25, 100, 100, [],
         progress=_NoProgress(),
     ))[-1]
     assert result[0] is None
@@ -178,7 +178,7 @@ def test_process_runs_the_real_pipeline_end_to_end():
         return
     img = Image.open(FIXTURE).convert("RGB")
     gallery, report, warnings = list(ui.process(
-        img, str(FIXTURE), "Gown", ui._AUTO_FABRIC, "champagne_silk", None, False, 88, 50, 95, 100,
+        img, str(FIXTURE), "Gown", ui._AUTO_FABRIC, "champagne_silk", None, False, 88, 50, 95, 100, -25, 100, 100,
         ui._preset_choices()[:2], progress=_NoProgress(),
     ))[-1]
     assert gallery is not None and len(gallery) == 2
@@ -228,11 +228,79 @@ def test_a_custom_backdrop_photo_runs_through_the_real_pipeline():
         # test_ground.py; a flat synthetic colour field is not a meaningful
         # input for it.
         gallery, report, warnings = list(ui.process(
-            img, str(FIXTURE), "Gown", ui._AUTO_FABRIC, "", str(bg_path), False, 88, 50, 40, 100,
+            img, str(FIXTURE), "Gown", ui._AUTO_FABRIC, "", str(bg_path), False, 88, 50, 40, 100, -25, 100, 100,
             ui._preset_choices()[:1], progress=_NoProgress(),
         ))[-1]
         assert gallery is not None and len(gallery) == 1
         assert "✓  colour_fidelity" in report, report
+
+
+def test_compare_refuses_with_no_photographs():
+    result = list(ui.compare_backdrops(None, "Gown", ui._AUTO_FABRIC, None,
+                                       progress=_NoProgress()))[-1]
+    assert result[0] == []
+    assert "photograph" in result[1].lower()
+
+
+def test_sheet_grid_lays_out_every_cell_and_survives_an_empty_list():
+    """The contact sheet's own assembly, without matting: eleven labelled
+    cells land in a 4-wide grid of the right size, and a failed
+    photograph's empty sheet still renders (with just the title) rather
+    than raising inside the generator."""
+    cells = [(f"bg_{i}", Image.new("RGB", (300, 450), (i * 20, 90, 120))) for i in range(11)]
+    sheet = ui._sheet_grid(cells, "test")
+    cw, ch = ui._SHEET_CELL
+    assert sheet.size == (ui._SHEET_COLS * cw, 3 * ch + 28)  # 11 cells -> 3 rows of 4
+    empty = ui._sheet_grid([], "nothing")
+    assert empty.size[0] == ui._SHEET_COLS * cw and empty.size[1] > 0
+
+
+def test_the_compare_tab_takes_many_files_and_exists_in_the_app():
+    """Pins the bulk mechanism at the widget level: the upload must be
+    `file_count="multiple"`, and the tab must actually be wired into
+    `build()` -- a `compare_backdrops` that works when called directly but
+    was never attached to a button is not a feature."""
+    import inspect
+    src = inspect.getsource(ui.build_compare_tab)
+    assert 'file_count="multiple"' in src
+    assert "compare_backdrops" in src
+    assert "build_compare_tab()" in inspect.getsource(ui.build)
+
+
+def test_compare_runs_two_real_photographs_into_two_sheets():
+    """The bulk claim, for real: two photographs in, two contact sheets
+    out, each with every built-in backdrop on it -- and the first sheet
+    arrives before the second matte starts (the generator yields per
+    photograph). Slow: two real mattes. Deliberately not skipped when the
+    fixture exists, because "bulk" is exactly the thing a single-photo test
+    cannot prove."""
+    if not FIXTURE.exists():
+        print("  (skipped -- no fixture on disk)")
+        return
+    import tempfile
+    from dressaug import backgrounds
+    with tempfile.TemporaryDirectory() as td:
+        # The same fixture twice, under two names -- what matters is two
+        # independent runs, not two different garments.
+        a = pathlib.Path(td) / "first-dress.png"
+        b = pathlib.Path(td) / "second-dress.png"
+        Image.open(FIXTURE).convert("RGB").save(a)
+        Image.open(FIXTURE).convert("RGB").save(b)
+        yields = list(ui.compare_backdrops([str(a), str(b)], "Gown", ui._AUTO_FABRIC, None,
+                                           progress=_NoProgress()))
+    # Progressive: a yield with one sheet must precede the final one with two.
+    counts = [len(y[0]) for y in yields]
+    assert 1 in counts and counts[-1] == 2, counts
+    sheets, status = yields[-1]
+    assert "2/2" in status
+    captions = [c for _, c in sheets]
+    assert captions == ["first-dress", "second-dress"]
+    # Each sheet is a real grid sized for all the presets.
+    cw, ch = ui._SHEET_CELL
+    n = len(backgrounds.PRESETS)
+    rows = (n + ui._SHEET_COLS - 1) // ui._SHEET_COLS
+    for im, _ in sheets:
+        assert im.size == (ui._SHEET_COLS * cw, rows * ch + 28)
 
 
 if __name__ == "__main__":

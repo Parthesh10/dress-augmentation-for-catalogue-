@@ -465,7 +465,8 @@ def contact_shadow(
 
 
 def harmonize_gain(
-    bg_srgb: np.ndarray, ox: int, oy: int, w: int, h: int, *, custom: bool = False,
+    bg_srgb: np.ndarray, ox: int, oy: int, w: int, h: int, *,
+    custom: bool = False, scale: float = 1.0,
 ) -> np.ndarray:
     """The per-channel linear-light gain that lends the subject a sliver of
     the backdrop's own ambient colour, so it reads as lit by the same room
@@ -489,9 +490,16 @@ def harmonize_gain(
     `Thresholds.harmonize_strength_custom`'s own comment for why an
     operator-uploaded backdrop photograph needs the more cautious setting
     while every built-in preset keeps the ordinary one.
+
+    `scale` (2026-09-22) is the operator's own override on top of that --
+    1.0 is the ordinary strength, 0 turns the tint off entirely. It only
+    ever multiplies `strength`, never the `gmin`/`gmax` clamp: those stay
+    the hard backstop against the `colour_fidelity` gate regardless of what
+    the operator dials in, the same way `floor_frac` still can't place feet
+    outside the canvas no matter what number is typed in.
     """
     T = THRESHOLDS
-    strength = T.harmonize_strength_custom if custom else T.harmonize_strength
+    strength = (T.harmonize_strength_custom if custom else T.harmonize_strength) * scale
     gmin = T.harmonize_gain_min_custom if custom else T.harmonize_gain_min
     gmax = T.harmonize_gain_max_custom if custom else T.harmonize_gain_max
 
@@ -511,6 +519,43 @@ def harmonize_gain(
 
     gain = 1.0 + strength * (cast - 1.0)
     return np.clip(gain, gmin, gmax).astype(np.float32)
+
+
+def exposure_gain(
+    scene_luminance: float | None, *, custom: bool = False, scale: float = 1.0,
+) -> float:
+    """A single brightness multiplier nudging the subject toward the
+    backdrop's own light level.
+
+    Colour cast is `harmonize_gain`'s job; this is the other half of
+    "lit by the same room" -- a garment photographed in dull shade stays
+    conspicuously dull against a bright sunlit backdrop, and conspicuously
+    bright against a dark drape, however well its colour is matched.
+
+    **Perceptual difference, not a linear-light ratio.** The backdrop
+    library's luminance is bimodal (see
+    `Thresholds.exposure_reference_luminance`); a ratio would ask for a 93%
+    darkening on the darkest preset and flatten all four dark ones onto the
+    clamp. The sRGB-space difference against a mid-library reference
+    spreads them sensibly and keeps the nudge small.
+
+    **This deliberately does not try to match the backdrop's brightness.**
+    A white dress against a near-black drape should stay white; the claim
+    is only "this scene is dimmer than average, so light the subject a
+    little dimmer", never "make the subject as dark as the backdrop".
+
+    Returns 1.0 (no change) when the backdrop's luminance is unknown.
+    """
+    if scene_luminance is None:
+        return 1.0
+    T = THRESHOLDS
+    strength = (T.exposure_strength_custom if custom else T.exposure_strength) * scale
+    gmin = T.exposure_gain_min_custom if custom else T.exposure_gain_min
+    gmax = T.exposure_gain_max_custom if custom else T.exposure_gain_max
+    pair = linear_to_srgb(
+        np.array([scene_luminance, T.exposure_reference_luminance], np.float32))
+    delta = float(pair[0] - pair[1])
+    return float(np.clip(1.0 + strength * delta, gmin, gmax))
 
 
 def soften_backdrop(
@@ -598,6 +643,10 @@ def compose(
     fill: float | None = None,
     x_frac: float | None = None,
     blur_strength: float | None = None,
+    key_dir_x: float | None = None,
+    harmonize_scale: float | None = None,
+    scene_luminance: float | None = None,
+    exposure_scale: float | None = None,
 ):
     """Alpha-composite in linear light. Fractional alpha is honoured exactly.
 
@@ -608,9 +657,16 @@ def compose(
     shadow only ever shows where there is no subject, which is exactly the
     area it exists to describe.
 
-    `floor_frac`, `fill`, `x_frac` and `blur_strength` are all `None` for
-    "decide automatically" -- the app's override controls set them.
+    `floor_frac`, `fill`, `x_frac`, `blur_strength`, `key_dir_x` and
+    `harmonize_scale` are all `None` for "decide automatically" -- the
+    app's override controls set them. `key_dir_x` replaces only the
+    horizontal component of `key_dir` (which side the shadow falls away
+    from); the vertical component -- how steep the light is -- stays
+    whatever the backdrop's own authored or inferred value was, since
+    nothing asked for control over that.
     """
+    if key_dir_x is not None:
+        key_dir = (float(key_dir_x), key_dir[1])
     p_res, a_res, ox, oy = place(alpha, product, bg.size, floor_frac, fill=fill, x_frac=x_frac)
 
     # The backdrop is left as sharp as the subject everywhere except a
@@ -631,7 +687,14 @@ def compose(
     canvas *= (1 - THRESHOLDS.contact_shadow_opacity * shadow)[..., None]
 
     h, w = a_res.shape
-    gain = harmonize_gain(bg_srgb, ox, oy, w, h, custom=custom_backdrop)
+    gain = harmonize_gain(bg_srgb, ox, oy, w, h, custom=custom_backdrop,
+                          scale=1.0 if harmonize_scale is None else harmonize_scale)
+    # Colour cast and exposure are the two halves of "lit by the same
+    # room"; both multiply the subject in linear light, both bounded, and
+    # both answerable to the colour_fidelity gate downstream.
+    gain = gain * exposure_gain(
+        scene_luminance, custom=custom_backdrop,
+        scale=1.0 if exposure_scale is None else exposure_scale)
     piece = srgb_to_linear(_arr(p_res)) * gain[None, None, :]
     region = canvas[oy:oy + h, ox:ox + w]
     a = a_res[..., None]
@@ -651,6 +714,10 @@ def _placement_overrides(ctx: Context) -> dict:
         fill=ctx.extra.get("subject_fill"),
         x_frac=ctx.extra.get("subject_x"),
         blur_strength=ctx.extra.get("seam_blur_strength"),
+        key_dir_x=ctx.extra.get("light_dir_x"),
+        harmonize_scale=ctx.extra.get("tint_strength"),
+        scene_luminance=ctx.extra.get("key_luminance"),
+        exposure_scale=ctx.extra.get("exposure_strength"),
     )
 
 

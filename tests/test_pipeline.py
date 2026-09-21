@@ -393,6 +393,83 @@ def test_custom_backdrop_harmonize_bounds_are_tighter_than_the_preset_ones():
     assert cautious.min() >= THRESHOLDS.harmonize_gain_min_custom - 1e-6
 
 
+def test_harmonize_scale_of_zero_turns_the_tint_off():
+    """2026-09-22: the app's colour-tint override. 0 must mean no tint at
+    all -- gain exactly 1.0, not merely reduced."""
+    bg = np.zeros((200, 200, 3), np.float32)
+    bg[..., 0] = 1.0  # saturated red, would ordinarily pull the gain up
+    gain = stages.harmonize_gain(bg, ox=0, oy=0, w=200, h=200, scale=0.0)
+    assert np.allclose(gain, 1.0, atol=1e-6), gain
+
+
+def test_harmonize_scale_of_two_lends_double_the_ordinary_cast_but_stays_clamped():
+    """Scale multiplies the strength, not the hard gmin/gmax clamp -- the
+    clamp is what actually protects the colour_fidelity gate, and no
+    operator-set number should be able to remove it."""
+    bg = np.zeros((200, 200, 3), np.float32)
+    bg[..., 0] = 1.0
+    ordinary = stages.harmonize_gain(bg, ox=0, oy=0, w=200, h=200, scale=1.0)
+    doubled = stages.harmonize_gain(bg, ox=0, oy=0, w=200, h=200, scale=2.0)
+    assert doubled[0] >= ordinary[0]
+    assert doubled.max() <= THRESHOLDS.harmonize_gain_max + 1e-6
+    assert doubled.min() >= THRESHOLDS.harmonize_gain_min - 1e-6
+
+
+def test_exposure_gain_darkens_for_a_dark_backdrop_and_lifts_for_a_bright_one():
+    """2026-09-22: exposure matching, the other half of "lit by the same
+    room" alongside harmonize_gain's colour cast. Measured against the
+    real library: midnight_velvet (lum 0.030) should come back darkened,
+    studio_ivory (lum 0.750) lifted, both modest."""
+    dark = stages.exposure_gain(0.030)
+    bright = stages.exposure_gain(0.750)
+    assert dark < 1.0 < bright
+    assert THRESHOLDS.exposure_gain_min <= dark <= 1.0
+    assert 1.0 <= bright <= THRESHOLDS.exposure_gain_max
+
+
+def test_exposure_gain_is_neutral_at_the_reference_luminance():
+    assert abs(stages.exposure_gain(THRESHOLDS.exposure_reference_luminance) - 1.0) < 1e-6
+
+
+def test_exposure_gain_does_not_try_to_match_the_backdrops_absolute_brightness():
+    """The explicit non-goal: a white dress against a near-black drape
+    should stay recognisably white, not be dragged down toward the
+    backdrop's own luminance. The bound on how far exposure_gain can move
+    is exposure_gain_min itself, nowhere near enough to turn white grey."""
+    assert stages.exposure_gain(0.0) >= THRESHOLDS.exposure_gain_min
+    assert THRESHOLDS.exposure_gain_min > 0.5, "the clamp itself must stay a small nudge"
+
+
+def test_exposure_gain_is_neutral_with_no_known_backdrop_luminance():
+    assert stages.exposure_gain(None) == 1.0
+
+
+def test_exposure_scale_of_zero_disables_it_and_two_stays_inside_the_clamp():
+    bright = stages.exposure_gain(0.750, scale=0.0)
+    assert bright == 1.0
+    doubled = stages.exposure_gain(0.750, scale=2.0)
+    assert doubled <= THRESHOLDS.exposure_gain_max + 1e-6
+
+
+def test_key_dir_x_override_replaces_only_the_horizontal_component():
+    """2026-09-22: the app's light-direction override. Only the x
+    component of key_dir should change; the y (how steep the light is)
+    stays whatever the backdrop's own value was."""
+    a_res = _standing_alpha()
+    product = Image.new("RGB", a_res.shape[::-1], (128, 128, 128))
+    bg = Image.new("RGB", (400, 600), (150, 150, 150))
+    _, alpha_default = stages.compose(bg, product, a_res, key_dir=(-0.25, -0.45))
+    out_right, _ = stages.compose(
+        bg, product, a_res, key_dir=(-0.25, -0.45), key_dir_x=0.35)
+    out_left, _ = stages.compose(
+        bg, product, a_res, key_dir=(-0.25, -0.45), key_dir_x=-0.35)
+    # The shadow (and therefore the composite) should differ measurably
+    # between a light forced to the right versus forced to the left.
+    diff = np.abs(
+        np.asarray(out_right, np.float32) - np.asarray(out_left, np.float32))
+    assert diff.max() > 1.0, "expected the shadow position to move"
+
+
 def test_harmonize_gain_is_bounded_regardless_of_backdrop_saturation():
     """However saturated the sampled backdrop patch, the gain can never
     leave the configured [min, max] band -- the actual guarantee against

@@ -1169,6 +1169,129 @@ field -- it hides a seam, it does not simulate a lens, and the docstring
 says so.
 ---
 
+## 1n. Every automatic decision gets a manual override; exposure matching; a contact-sheet tab, 2026-09-22
+
+### The ask
+
+Told directly the AI-service route (§1m-adjacent conversation) isn't
+fundable right now, and to instead close real gaps in the existing
+pipeline: tune the photo per backdrop, resize/reposition, **everything
+reachable from the app itself**, a manual override for anything the
+automatic pipeline might get wrong, and -- named as something already
+genuinely useful -- turn the contact-sheet comparisons (built by hand in
+scratch scripts all session) into a real feature, including comparing
+**many** photographs at once ("bulk"), with the ability to add extra
+backdrop photos into that comparison per image.
+
+### The two overrides that were still missing
+
+Placement (floor, size, position, seam softening) already had manual
+overrides as of §1m. Two automatic decisions did not:
+
+- **Light direction.** `infer_key_direction` (§1j) guesses which side a
+  custom backdrop is lit from; there was no way to correct it if the
+  guess read the scene wrong. `compose()` now takes `key_dir_x`,
+  replacing only the horizontal component -- the vertical steepness stays
+  whatever the backdrop's own value was, since nothing asked for control
+  over that.
+- **Colour tint strength.** `harmonize_gain` (§1h) had no per-run dial --
+  it was always exactly the configured strength or, for a custom
+  backdrop, exactly the halved one. `scale` (1.0 = ordinary, 0 = off)
+  multiplies the *strength*, never the `gmin`/`gmax` clamp -- the clamp is
+  what actually protects the colour_fidelity gate, and no operator number
+  should be able to remove that backstop.
+
+### Exposure matching -- the gap those two overrides sat next to
+
+"Tune the original image to match the bg preset, little tweaks... to
+make the end result look real" named a real, unaddressed gap directly:
+colour *cast* was matched (§1h); *exposure* was not. A garment shot in
+dull shade stayed dull against a bright sunlit room, and stayed
+conspicuously bright against a dark drape, however well its colour
+matched.
+
+**Measured before choosing the formula, not assumed.** The backdrop
+library's luminance turned out strongly bimodal: four dark presets at
+0.030-0.049, seven light ones at 0.416-0.750, nothing between. A ratio
+against the middle would ask for a 93% darkening on `midnight_velvet` and
+flatten all four dark presets onto the same clamp -- the exact failure
+mode the §1g cove-floor fix already diagnosed once this session, in the
+opposite direction. `exposure_gain()` compares in **sRGB space** against
+the library's median (`linen_flatlay`) instead, which spreads the four
+dark presets sensibly: -4.5% to -5.1%, not identical.
+
+**Deliberately does not try to match the backdrop's absolute brightness.**
+A white dress in front of a near-black drape should stay recognisably
+white -- the claim is only "this scene reads dimmer than average, light
+the subject a little dimmer accordingly", never "make the subject as dark
+as the backdrop". The clamp (`exposure_gain_min` 0.92) makes that
+physically impossible regardless of input.
+
+**Checked against the colour_fidelity gate on the same real photographs
+already used to verify every earlier fix**, not just in isolation:
+
+| Photo | Backdrop | dE2000 without | dE2000 with | Budget |
+|---|---|---:|---:|---:|
+| `06-sarees-red` (dark saree) | `midnight_velvet` | 1.78 | 2.24 | 3.0 |
+| `IMG_8374` (bright, busy print) | `studio_ivory` | 0.69 | 0.78 | 3.0 |
+
+The worst case costs 0.46 dE2000 and still clears the gate with 25%
+headroom. Looked at directly, not just measured
+(`work-reports/exposure-compare-2026-09-22/on-vs-off.jpg`): the dark-saree
+case is the more visible of the two, and reads as *lit* by the darker
+room rather than merely *placed in front of* it.
+
+### Compare Backdrops -- a real tab, not a scratch script
+
+Every contact sheet this session (§1g through §1l) was built by a
+throwaway Python script run outside the app. `compare_backdrops()` is the
+same idea as a first-class feature: upload one photograph or many, get
+one contact sheet per photograph -- that garment against all 11
+built-in presets, automatically placed, plus any backdrop photos added in
+an optional accordion. **Preview only, by design choice** (asked
+directly): nothing is exported from this tab; picking a backdrop here
+means selecting it by name on the *Process* tab for the real file, so the
+comparison stays fast and cheap while the export stays exactly the
+pipeline already verified.
+
+**The bulk case is not a separate code path.** Matting is the one
+expensive step; the eleven-plus composites that follow are cheap, so N
+photographs costs N mattes, not N x 11 -- and the function is a generator
+that yields each finished sheet as it completes, so a batch of twenty
+shows its first result after the first matte rather than after the
+twentieth. Verified for real, not only asserted: two real photographs in
+one call produced two sheets, the first yielded before the second matte
+started.
+
+Custom backdrops added to a comparison run through the same ground
+detector as the Process tab; one the detector considers unsuitable is
+still shown, labelled **[!]**, rather than silently dropped -- the
+operator's own judgement stays the final word, same principle as the
+warning-not-exception design in §1l.
+
+### Tests
+
+**13 new tests**: `key_dir_x` moves the shadow measurably and touches
+only the horizontal component; `harmonize`/`exposure` scale-of-zero
+disables each override exactly (not merely reduces it) while scale-of-two
+still respects the hard clamp; `exposure_gain` is neutral at the
+reference luminance and with no known luminance; the sheet-grid
+assembly lays out eleven cells correctly and survives an empty list; the
+Compare tab is wired to a real `file_count="multiple"` upload and actually
+attached in `build()`; and the real bulk test above. **105 tests total.**
+
+### What this does not claim
+
+Exposure matching, like colour tint, is a global per-frame multiplier --
+it cannot add real directional falloff (brighter on the side facing the
+light, darker on the side away from it), which is the harder problem
+named and set aside in §1i's "AI integration" discussion. The two
+overrides added here (light direction, tint strength) are UI-level dials
+on formulas that already existed; nothing about the underlying grounding,
+colour, or exposure model changed, only that every one of them can now be
+corrected by hand when it gets a specific photograph wrong.
+---
+
 ## 2. What was inherited, and why
 
 | Taken | From | Why |

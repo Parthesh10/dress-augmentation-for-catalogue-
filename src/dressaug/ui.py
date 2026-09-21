@@ -20,6 +20,7 @@ import traceback
 from pathlib import Path
 
 import gradio as gr
+import numpy as np
 from PIL import Image, ImageOps
 
 from . import backgrounds, stages  # noqa: F401 -- importing stages registers them
@@ -110,6 +111,9 @@ def process(
     x_pct,
     floor_frac_pct,
     blur_pct,
+    light_dir_pct,
+    tint_pct,
+    exposure_pct,
     preset_labels: list[str],
     progress=gr.Progress(),
 ):
@@ -167,6 +171,11 @@ def process(
             ctx.extra["subject_fill"] = float(fill_pct) / 100.0
             ctx.extra["subject_x"] = float(x_pct) / 100.0
             ctx.extra["seam_blur_strength"] = float(blur_pct) / 100.0
+            # -100..100 on the slider maps to the same +-0.4 range
+            # `infer_key_direction` itself clips to.
+            ctx.extra["light_dir_x"] = float(light_dir_pct) / 100.0 * 0.4
+            ctx.extra["tint_strength"] = float(tint_pct) / 100.0
+            ctx.extra["exposure_strength"] = float(exposure_pct) / 100.0
 
         steps = stages_for(cfg.graph)
         step_progress = {"ingest": 0.05, "matte": 0.15, "background": 0.55,
@@ -206,6 +215,136 @@ def process(
 
         progress(1.0, desc="done")
         yield gallery, report, warn_lines
+
+
+#: Contact-sheet cell size. Preview quality on purpose -- the sheet is for
+#: deciding which backdrop, and the Process tab makes the real file.
+_SHEET_CELL = (260, 400)
+_SHEET_COLS = 4
+#: Working resolution for each composite in the sheet. Well below export
+#: size: eleven composites per photograph, and every one of them is a
+#: throwaway once a backdrop is picked.
+_SHEET_CANVAS_LONG = 900
+
+
+def _sheet_grid(cells: list[tuple[str, Image.Image]], title: str) -> Image.Image:
+    """Assemble labelled thumbnails into one image, `_SHEET_COLS` across."""
+    from PIL import ImageDraw
+    cw, ch = _SHEET_CELL
+    rows = max((len(cells) + _SHEET_COLS - 1) // _SHEET_COLS, 1)
+    sheet = Image.new("RGB", (_SHEET_COLS * cw, rows * ch + 28), (24, 24, 24))
+    d = ImageDraw.Draw(sheet)
+    d.text((8, 7), title, fill=(235, 235, 235))
+    for i, (label, im) in enumerate(cells):
+        t = im.copy()
+        t.thumbnail((cw - 10, ch - 30))
+        x, y = (i % _SHEET_COLS) * cw, 28 + (i // _SHEET_COLS) * ch
+        sheet.paste(t, (x + (cw - t.width) // 2, y + 22))
+        d.text((x + 6, y + 4), label, fill=(255, 235, 120))
+    return sheet
+
+
+def compare_backdrops(
+    upload_paths,
+    garment_label: str,
+    fabric_label: str,
+    extra_backdrop_paths,
+    progress=gr.Progress(),
+):
+    """One or many garment photographs, each against every built-in backdrop
+    (plus any backdrop photos the operator adds), as one contact sheet per
+    photograph. Preview only: nothing is exported. Pick a backdrop here,
+    then make the real file on the Process tab.
+
+    The expensive step -- matting -- runs once per photograph; the eleven
+    (or more) composites that follow reuse it, so a sheet costs one matte
+    plus a few seconds. That is also why this is the bulk path: N
+    photographs is N mattes, not N x 11.
+
+    A generator: each finished sheet is yielded as it completes, so a
+    batch of twenty photographs shows its first result after the first
+    matte rather than after the twentieth.
+    """
+    if not upload_paths:
+        yield [], "Add at least one photograph."
+        return
+    if isinstance(upload_paths, (str, Path)):
+        upload_paths = [upload_paths]
+    extra_paths = extra_backdrop_paths or []
+    if isinstance(extra_paths, (str, Path)):
+        extra_paths = [extra_paths]
+
+    garment = _garment_from_label(garment_label)
+    fabric = _fabric_from_label(fabric_label)
+    preset_names = list(_BACKDROP_NAMES)
+    extras = [(Path(p).stem, load_upload(str(p))) for p in extra_paths]
+    n_bg = len(preset_names) + len(extras)
+    total = len(upload_paths)
+
+    sheets: list[tuple[Image.Image, str]] = []
+    for pi, upath in enumerate(upload_paths):
+        stem = _export_stem(str(upath))
+        base = pi / total
+        progress(base, desc=f"{stem}: removing background ({pi + 1}/{total})")
+        with tempfile.TemporaryDirectory() as td:
+            src_path = Path(td) / f"{stem}.png"
+            load_upload(str(upath)).save(src_path)
+            cfg = JobConfig(graph=Graph.FLAT, garment=garment, fabric=fabric,
+                            background=preset_names[0])
+            job_id = f"sheet-{stem[:16]}-{int(time.time())}"
+            ctx = Context(
+                job_id=job_id, source_path=src_path, cfg=cfg,
+                store=ArtifactStore(job_id),
+                manifest=JobManifest(job_id=job_id, source=str(src_path), profile=cfg.profile),
+            )
+            try:
+                ctx = stages.ingest(ctx)
+                ctx = stages.matte(ctx)
+            except Exception as exc:  # noqa: BLE001 -- surfaced, not hidden
+                sheets.append((_sheet_grid([], f"{stem}: FAILED -- {exc}"), stem))
+                yield [s for s in sheets], f"{stem} failed: {exc}"
+                continue
+
+            # Shrink the working canvas for the sheet: `stages.background`
+            # sizes the canvas from the source, so a smaller source means
+            # smaller (faster) composites without touching the stage itself.
+            w, h = ctx.source.size
+            scale = _SHEET_CANVAS_LONG / max(w, h)
+            if scale < 1:
+                small = (max(int(w * scale), 64), max(int(h * scale), 64))
+                ctx.source = ctx.source.resize(small, Image.LANCZOS)
+                ctx.product = ctx.product.resize(small, Image.LANCZOS)
+                ctx.alpha = np.asarray(
+                    Image.fromarray((ctx.alpha * 255).astype(np.uint8), "L")
+                    .resize(small, Image.LANCZOS), dtype=np.float32) / 255.0
+
+            keep = {k: v for k, v in ctx.extra.items()
+                    if k in ("matting_device", "matte_coverage", "partial_alpha_fraction")}
+            cells: list[tuple[str, Image.Image]] = []
+            jobs = [(n, None) for n in preset_names] + [(n, im) for n, im in extras]
+            for bi, (name, custom_im) in enumerate(jobs):
+                progress(base + (bi + 1) / n_bg / total,
+                         desc=f"{stem}: {name} ({bi + 1}/{n_bg})")
+                ctx.extra = dict(keep)
+                ctx.cfg.background = name if custom_im is None else "custom"
+                if custom_im is not None:
+                    ctx.extra["custom_background"] = custom_im
+                ctx.background = None
+                ctx.composited = None
+                ctx.manifest.warnings = []
+                try:
+                    ctx = stages.background(ctx)
+                    ctx = stages.composite(ctx)
+                    label = name
+                    if ctx.extra.get("ground_usable") is False:
+                        label = f"{name}  [!]"
+                    cells.append((label, ctx.composited))
+                except Exception as exc:  # noqa: BLE001
+                    cells.append((f"{name}: failed", Image.new("RGB", (200, 300), (60, 20, 20))))
+            sheets.append((_sheet_grid(cells, stem), stem))
+            yield [s for s in sheets], f"{len(sheets)}/{total} done"
+    progress(1.0, desc="done")
+    yield [s for s in sheets], f"{len(sheets)}/{total} done"
 
 
 def _build_preset_label_map() -> dict[str, str]:
@@ -331,6 +470,29 @@ def build_process_tab() -> None:
                          "the only place the backdrop is softened. Nothing else in "
                          "the backdrop is ever blurred.",
                 )
+                light_dir_pct = gr.Slider(
+                    minimum=-100, maximum=100, value=-25, step=5,
+                    label="Light direction (-100 = from the left, 100 = from the right)",
+                    info="Which side the light comes from, and so which way the "
+                         "contact shadow falls. Automatic reads this from the "
+                         "backdrop's own brightness; set it here when that reads "
+                         "the scene wrong.",
+                )
+                tint_pct = gr.Slider(
+                    minimum=0, maximum=200, value=100, step=5,
+                    label="Colour tint from the backdrop (%, 0 = off)",
+                    info="How much of the backdrop's own colour is lent to the "
+                         "garment so it reads as lit by the same room. The colour "
+                         "gate still caps this no matter what you set.",
+                )
+                exposure_pct = gr.Slider(
+                    minimum=0, maximum=200, value=100, step=5,
+                    label="Exposure match to the backdrop (%, 0 = off)",
+                    info="Dims the garment a little for a dark backdrop, lifts it a "
+                         "little for a bright one -- lit by the same room, not just "
+                         "coloured by it. Small by design (about -5% on the darkest "
+                         "preset); the colour gate caps it.",
+                )
             preset_defaults = _preset_choices()
             presets = gr.CheckboxGroup(
                 preset_defaults,
@@ -366,8 +528,63 @@ def build_process_tab() -> None:
     run_btn.click(
         process,
         inputs=[image, upload, garment, fabric, backdrop, custom_backdrop, auto_place,
-                fill_pct, x_pct, floor_frac, blur_pct, presets],
+                fill_pct, x_pct, floor_frac, blur_pct, light_dir_pct, tint_pct,
+                exposure_pct, presets],
         outputs=[output, report, warnings],
+    )
+
+
+def build_compare_tab() -> None:
+    gr.Markdown(
+        "Upload one photograph or many. Each comes back as a contact sheet -- "
+        "the same garment against every built-in backdrop, placed "
+        "automatically -- so you can pick by eye. **Preview only:** nothing is "
+        "exported from here. Once you've chosen, go to *Process a dress*, pick "
+        "that backdrop by name, and make the real file."
+    )
+    with gr.Row():
+        with gr.Column(scale=1):
+            uploads = gr.File(
+                label="Dress photographs (one or many)",
+                file_types=["image", ".heic", ".heif"],
+                file_count="multiple",
+                height=160,
+            )
+            with gr.Row():
+                garment = gr.Dropdown(
+                    _garment_choices(), value=_GARMENT_LABELS[Garment.PARTY_DRESS],
+                    label="Garment type",
+                    info="Applied to every photograph in this batch.",
+                )
+                fabric = gr.Dropdown(
+                    _fabric_choices(), value=_AUTO_FABRIC, label="Fabric",
+                )
+            with gr.Accordion("Also compare against your own backdrop photos", open=False):
+                gr.Markdown(
+                    "Optional. Any photos added here appear in every sheet alongside "
+                    "the built-in presets, placed automatically (floor found, figure "
+                    "sized). Same licence note as the Process tab: your own venue "
+                    "or decor, or licensed stock -- not screenshots or downloads. "
+                    "A backdrop the detector thinks isn't a place to stand is "
+                    "marked **[!]** on the sheet rather than left out."
+                )
+                extra_backdrops = gr.File(
+                    label="Backdrop photographs (optional)",
+                    file_types=["image", ".heic", ".heif"],
+                    file_count="multiple",
+                    height=120,
+                )
+            compare_btn = gr.Button("Compare backdrops", variant="primary")
+            status = gr.Textbox(label="Progress", lines=2, interactive=False)
+        with gr.Column(scale=2):
+            sheets = gr.Gallery(
+                label="Contact sheets -- one per photograph",
+                columns=1, height=760, object_fit="contain",
+            )
+    compare_btn.click(
+        compare_backdrops,
+        inputs=[uploads, garment, fabric, extra_backdrops],
+        outputs=[sheets, status],
     )
 
 
@@ -406,6 +623,8 @@ def build() -> gr.Blocks:
         with gr.Tabs():
             with gr.Tab("Process a dress"):
                 build_process_tab()
+            with gr.Tab("Compare backdrops"):
+                build_compare_tab()
             with gr.Tab("What's built"):
                 build_status_tab()
     return demo

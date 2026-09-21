@@ -22,6 +22,11 @@ data/incoming/
 # never committed, never published, same discipline as data/incoming/.
 test-images/
 
+# A handful of real photos exported for the operator to hand-upload to a
+# third-party service (Claid.ai etc) for evaluation, 2026-09-21. Same
+# photos as test-images/, same reason they're not committed.
+claid-test-batch/
+
 # Batch logs and comparison sheets. Regenerable; what matters is transcribed
 # into TASK.md.
 work-reports/

@@ -41,7 +41,7 @@ dominated by process/model-load overhead (~80-90s either way for a single
 photo) -- the GPU's win compounds across a batch, not a single image. See
 [TASK.md §1i](TASK.md).
 
-**93 tests, one command:** `.venv\Scripts\python.exe tests\run_all.py`
+**105 tests, one command:** `.venv\Scripts\python.exe tests\run_all.py`
 
 ---
 
@@ -133,6 +133,22 @@ shop's own photographs** — [TASK.md §5](TASK.md) says what a useful first set
 looks like.
 
 ---
+
+## Exposure matching, missing overrides, and a Compare Backdrops tab, 2026-09-22
+
+Closed the gaps flagged after moving away from paid AI tools. Two overrides
+that were missing -- light direction, colour tint strength -- now exist
+alongside the size/position/floor/blur ones from §1m. New: **exposure
+matching**, the other half of "lit by the same room" beside colour tint --
+measured against the library's actual (bimodal) luminance, not a naive
+ratio, and checked against the colour_fidelity gate on real photographs
+before trusting it (worst case: +0.46 dE2000, still 25% under budget). And
+a real **Compare Backdrops** tab: upload one photo or many, get a contact
+sheet per photo against all 11 presets (plus any backdrop photos you add),
+automatically placed -- the same comparison built by hand in scratch
+scripts all session, now a feature, and bulk-capable from the start (one
+matte per photo, not one per backdrop). Full account in
+[TASK.md §1n](TASK.md).
 
 ## No blur except the seam; a figure sized to the scene; overrides, 2026-09-21
 

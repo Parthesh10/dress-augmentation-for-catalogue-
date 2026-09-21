@@ -252,6 +252,35 @@ class Thresholds:
     harmonize_strength_custom: float = 0.08
     harmonize_gain_min_custom: float = 0.96
     harmonize_gain_max_custom: float = 1.04
+    # ---- exposure matching, 2026-09-22 --------------------------------------
+    #: Asked for directly: "tune the original image to match the bg preset
+    #: depending on each bg -- little tweaks just to make it look real."
+    #: Colour cast was already matched (`harmonize_*`); *exposure* was not,
+    #: so a garment shot in dull shade stayed dull against a bright sunlit
+    #: room, and stayed conspicuously bright against a dark drape.
+    #:
+    #: The comparison is **perceptual, not a linear-light ratio.** Measured
+    #: across the library, backdrop luminance is strongly bimodal -- four
+    #: dark presets at 0.030-0.049 and seven light ones at 0.416-0.750,
+    #: nothing in between. A ratio against the middle would ask for a 93%
+    #: darkening on `midnight_velvet` and pin all four dark presets to the
+    #: clamp identically; the sRGB difference spreads them sensibly instead.
+    #: Same lesson as the §1g cove floor, in the opposite direction.
+    #:
+    #: The reference is the library median (`linen_flatlay`), i.e. "an
+    #: ordinarily lit scene" -- a backdrop darker than that dims the subject
+    #: slightly, brighter lifts it slightly.
+    exposure_reference_luminance: float = 0.4471
+    exposure_strength: float = 0.10
+    exposure_gain_min: float = 0.92
+    exposure_gain_max: float = 1.08
+    #: More cautious for an operator's own photograph, same reasoning as
+    #: `harmonize_strength_custom`: its luminance is not a number this
+    #: project chose.
+    exposure_strength_custom: float = 0.06
+    exposure_gain_min_custom: float = 0.95
+    exposure_gain_max_custom: float = 1.05
+
     # ---- the contact seam, 2026-09-21 ---------------------------------------
     #: **No whole-frame blur.** Two earlier designs applied one (0.02, then
     #: 0.004 of the shorter side, plus a ramp toward the bottom edge) and
