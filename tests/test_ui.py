@@ -111,7 +111,7 @@ def test_the_app_builds_without_error():
 
 def test_missing_image_is_refused_without_running_the_pipeline():
     result = list(ui.process(
-        None, None, "Gown", ui._AUTO_FABRIC, "studio_ivory", None, False, 95,
+        None, None, "Gown", ui._AUTO_FABRIC, "studio_ivory", None, False, 88, 50, 95, 100,
         ui._preset_choices()[:1], progress=_NoProgress(),
     ))[-1]
     assert result[0] is None
@@ -121,7 +121,7 @@ def test_missing_image_is_refused_without_running_the_pipeline():
 def test_missing_backdrop_is_refused():
     img = Image.new("RGB", (80, 80), (180, 140, 140))
     result = list(ui.process(
-        img, None, "Gown", ui._AUTO_FABRIC, "", None, False, 95,
+        img, None, "Gown", ui._AUTO_FABRIC, "", None, False, 88, 50, 95, 100,
         ui._preset_choices()[:1], progress=_NoProgress(),
     ))[-1]
     assert result[0] is None
@@ -131,7 +131,7 @@ def test_missing_backdrop_is_refused():
 def test_missing_presets_is_refused():
     img = Image.new("RGB", (80, 80), (180, 140, 140))
     result = list(ui.process(
-        img, None, "Gown", ui._AUTO_FABRIC, "studio_ivory", None, False, 95, [],
+        img, None, "Gown", ui._AUTO_FABRIC, "studio_ivory", None, False, 88, 50, 95, 100, [],
         progress=_NoProgress(),
     ))[-1]
     assert result[0] is None
@@ -147,7 +147,7 @@ def test_a_custom_backdrop_photo_bypasses_the_missing_backdrop_refusal():
     exactly what this test is checking."""
     img = Image.new("RGB", (80, 80), (180, 140, 140))
     result = list(ui.process(
-        img, None, "Gown", ui._AUTO_FABRIC, "", str(FIXTURE), False, 95, [],
+        img, None, "Gown", ui._AUTO_FABRIC, "", str(FIXTURE), False, 88, 50, 95, 100, [],
         progress=_NoProgress(),
     ))[-1]
     assert result[0] is None
@@ -178,7 +178,7 @@ def test_process_runs_the_real_pipeline_end_to_end():
         return
     img = Image.open(FIXTURE).convert("RGB")
     gallery, report, warnings = list(ui.process(
-        img, str(FIXTURE), "Gown", ui._AUTO_FABRIC, "champagne_silk", None, False, 95,
+        img, str(FIXTURE), "Gown", ui._AUTO_FABRIC, "champagne_silk", None, False, 88, 50, 95, 100,
         ui._preset_choices()[:2], progress=_NoProgress(),
     ))[-1]
     assert gallery is not None and len(gallery) == 2
@@ -228,7 +228,7 @@ def test_a_custom_backdrop_photo_runs_through_the_real_pipeline():
         # test_ground.py; a flat synthetic colour field is not a meaningful
         # input for it.
         gallery, report, warnings = list(ui.process(
-            img, str(FIXTURE), "Gown", ui._AUTO_FABRIC, "", str(bg_path), False, 40,
+            img, str(FIXTURE), "Gown", ui._AUTO_FABRIC, "", str(bg_path), False, 88, 50, 40, 100,
             ui._preset_choices()[:1], progress=_NoProgress(),
         ))[-1]
         assert gallery is not None and len(gallery) == 1

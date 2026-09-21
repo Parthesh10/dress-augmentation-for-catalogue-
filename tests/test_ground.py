@@ -101,6 +101,24 @@ def test_a_sliver_of_floor_below_the_minimum_falls_back_to_default_not_a_guess()
     assert est.floor_frac is None, "a sub-threshold floor share must not produce a floor line"
 
 
+def test_a_wide_shot_gets_a_smaller_subject_than_a_tight_one():
+    """2026-09-21: the same-size subject in every backdrop was the reported
+    problem. The cue is where the floor starts -- floor from 30% down means
+    the camera is well back and a lot of room is in shot. Recorded: the
+    empty room (floor from 81%) versus the staircase (floor from 30%)."""
+    tight = ground.judge(_raw(ground_frac=0.19, ground_top=0.81)).suggested_fill()
+    wide = ground.judge(_raw(ground_frac=0.54, ground_top=0.30)).suggested_fill()
+    assert wide < tight, (wide, tight)
+    assert THRESHOLDS.scale_wide_fill <= wide <= tight <= THRESHOLDS.scale_tight_fill
+
+
+def test_no_floor_means_the_ordinary_default_size_not_a_guess():
+    """A drape or a plain wall is a studio-style tight shot; the subject
+    fills the frame as it always has. `None` -- not a number -- so
+    `place()` falls through to `THRESHOLDS.garment_fill` unchanged."""
+    assert ground.judge(_raw(ground_frac=0.0)).suggested_fill() is None
+
+
 def test_the_derived_floor_line_is_always_within_the_frame():
     for top in (0.0, 0.3, 0.7, 0.95, 1.0):
         est = ground.judge(_raw(ground_frac=0.5, ground_top=top))

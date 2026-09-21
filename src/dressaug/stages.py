@@ -261,13 +261,17 @@ def background(ctx: Context) -> Context:
         # run on the *original* upload, not the cover-cropped canvas, so
         # the answer is a property of the photograph and cached as one,
         # reused for every garment and every export size against it.
-        if ctx.extra.get("custom_floor_frac") is None:
+        want_floor = ctx.extra.get("custom_floor_frac") is None
+        want_fill = ctx.extra.get("subject_fill") is None
+        if want_floor or want_fill:
             from . import ground
             est = ground.detect_ground(custom)
             ctx.extra["ground_verdict"] = est.reason
             ctx.extra["ground_usable"] = est.usable
-            if est.floor_frac is not None:
+            if want_floor and est.floor_frac is not None:
                 ctx.extra["custom_floor_frac"] = est.floor_frac
+            if want_fill and est.suggested_fill() is not None:
+                ctx.extra["subject_fill"] = est.suggested_fill()
             if not est.usable:
                 # Not a hard failure: the operator may know better, and a
                 # batch script may want the number to filter on rather than
@@ -293,6 +297,9 @@ def background(ctx: Context) -> Context:
 def place(
     alpha: np.ndarray, product: Image.Image, size: tuple[int, int],
     floor_frac: float | None = None,
+    *,
+    fill: float | None = None,
+    x_frac: float | None = None,
 ):
     """Scale the garment to fill the frame vertically, bounded by width.
 
@@ -325,6 +332,15 @@ def place(
     "verified on 500 photographs" is a small amount of work rather than a
     large one: the number is a property of the backdrop, reused unchanged
     across every garment composited onto it.
+
+    `fill` (2026-09-21) is how much of the available height the subject
+    occupies -- `THRESHOLDS.garment_fill` when None. It exists because a
+    subject the same size in every backdrop is wrong: a wide room and a
+    tight drape are different distances from the camera, and a person
+    should be smaller in the first. `stages.background` derives it per
+    backdrop from how much floor is visible; the app can override it.
+    `x_frac` is the subject's horizontal centre as a fraction of width,
+    0.5 when None.
     """
     cw, ch = size
     ys, xs = np.nonzero(alpha > THRESHOLDS.alpha_floor)
@@ -335,7 +351,7 @@ def place(
     crop_p = product.crop((int(x0), int(y0), int(x1), int(y1)))
     bw, bh = crop_p.size
 
-    fill = THRESHOLDS.garment_fill
+    fill = THRESHOLDS.garment_fill if fill is None else float(np.clip(fill, 0.1, 1.0))
     # The vertical space actually available to fill against -- the whole
     # canvas ordinarily, but only down to the requested line when
     # `floor_frac` is set. Without this, a figure sized to fill 88% of the
@@ -354,7 +370,8 @@ def place(
         dtype=np.float32,
     ) / 255.0
 
-    ox = int(cw / 2 - nw / 2)
+    xc = cw / 2 if x_frac is None else float(np.clip(x_frac, 0.0, 1.0)) * cw
+    ox = int(np.clip(xc - nw / 2, 0, max(cw - nw, 0)))
     if floor_frac is not None:
         oy = int(np.clip(floor_frac, 0.0, 1.0) * ch) - nh
     else:
@@ -362,6 +379,26 @@ def place(
         oy = ch - nh - bottom_margin
     oy = max(oy, 0)
     return p_res, a_res, ox, oy
+
+
+def contact_band(a_res: np.ndarray, ox: int, oy: int) -> tuple[float, float, float] | None:
+    """Where the placed subject actually meets the ground: `(centre_x,
+    contact_y, width)` in canvas pixels, read off the bottom slice of its
+    own placed alpha. `None` if nothing solid reaches the bottom edge.
+
+    One measurement, shared: the contact shadow and the contact feather
+    (`soften_backdrop`) both sit on this so they cannot drift apart --
+    the same reason `place` and the shadow already share `oy`.
+    """
+    T = THRESHOLDS
+    h, w = a_res.shape
+    band = max(int(h * T.contact_shadow_band), 2)
+    coverage = a_res[-band:, :].mean(axis=0)
+    xs = np.nonzero(coverage > T.contact_shadow_min_density)[0]
+    if len(xs) == 0:
+        return None
+    x_lo, x_hi = float(xs.min()), float(xs.max())
+    return ((x_lo + x_hi) / 2 + ox, float(oy + h), max(x_hi - x_lo, w * 0.15))
 
 
 def contact_shadow(
@@ -389,20 +426,13 @@ def contact_shadow(
     cw, ch = canvas_size
     h, w = a_res.shape
 
-    band = max(int(h * T.contact_shadow_band), 2)
-    strip = a_res[-band:, :]
-    coverage = strip.mean(axis=0)
-    xs = np.nonzero(coverage > T.contact_shadow_min_density)[0]
-    if len(xs) == 0:
+    contact = contact_band(a_res, ox, oy)
+    if contact is None:
         # Nothing solid enough at the bottom edge to ground -- a product shot
         # entirely in the air (e.g. jewellery, if this pipeline ever sees
         # some) has nothing to cast a shadow from, and that is correct.
         return np.zeros((ch, cw), np.float32)
-
-    x_lo, x_hi = float(xs.min()), float(xs.max())
-    contact_w = max(x_hi - x_lo, w * 0.15)
-    contact_cx = (x_lo + x_hi) / 2 + ox
-    contact_y = oy + h
+    contact_cx, contact_y, contact_w = contact
 
     yy, xx = np.mgrid[0:ch, 0:cw].astype(np.float32)
     rx = max(contact_w * 0.55, 4.0)
@@ -483,50 +513,71 @@ def harmonize_gain(
     return np.clip(gain, gmin, gmax).astype(np.float32)
 
 
-def soften_backdrop(bg: Image.Image, contact_y: float | None = None) -> Image.Image:
-    """Depth of field for the backdrop: a light blur everywhere, ramping to
-    a stronger one below the subject's feet toward the bottom edge.
+def soften_backdrop(
+    bg: Image.Image,
+    contact_y: float | None = None,
+    contact_x: float | None = None,
+    contact_w: float | None = None,
+    strength: float | None = None,
+) -> Image.Image:
+    """Feather the backdrop where the subject's feet meet it. Nothing else.
 
-    Two blurs blended by a per-row weight, not one blur with a spatially
-    varying radius -- PIL has no such filter, and the blend gives the same
-    visible result for a fraction of the cost.
+    **Third design, after two were looked at and rejected on real
+    photographs.** The first blurred the whole backdrop lightly and a band
+    at the feet heavily: the band put a stripe across floorboards. The
+    second kept the overall blur and ramped it toward the bottom edge: the
+    stripe went, but the whole lower floor became a wash -- and, the actual
+    finding, *any* whole-frame blur beside a razor-sharp HD cutout reads as
+    a mismatch on its own. A sharp subject on a uniformly soft scene is not
+    what "in focus" looks like; it's what "pasted on" looks like.
 
-    **A ramp toward the bottom edge, not a band centred on the feet** --
-    changed after looking at the first version on real photographs. A band
-    peaked at the contact line put a visible horizontal stripe of heavier
-    blur across a floor's boards or a lawn's grass, right below the feet: it
-    replaced one "this is edited" cue with another. It was also physically
-    backwards. Depth of field falls off with distance from the focal plane,
-    and the floor at the subject's own contact line is at the subject's
-    distance -- it should be close to sharp. What goes soft in a real
-    photograph is the *foreground*, the floor between the subject and the
-    camera, which sits at the bottom of the frame. So the weight is 0 at the
-    contact line and rises smoothly (a smoothstep) to 1 at the bottom edge:
-    a monotonic gradient the eye reads as foreground blur, with no seam.
+    So: **no overall blur at all.** The backdrop stays as sharp as the
+    subject everywhere, which is the honest state of a real photograph at
+    this scale. The only thing softened is a small, feathered zone right at
+    the contact line -- the one place a paste seam actually exists -- and it
+    is localised in both axes: a Gaussian in y around `contact_y`, and a
+    broad Gaussian in x around `contact_x` with radius scaled to
+    `contact_w`, the subject's own footprint. That second axis is what stops
+    it ever becoming a stripe across a wide floor: the far left and right of
+    the frame are untouched. Calibrated by eye against five variants on a
+    herringbone floor (`work-reports/blur-calibration-2026-09-21/`), where
+    this one was the only one that softened the seam while leaving the
+    boards legible.
 
-    With no `contact_y` (nothing was placed), only the light overall blur
-    applies. All radii are fractions of the canvas's shorter side, so the
-    same setting reads the same at every export size.
+    `strength` scales the blur radius (1.0 = `THRESHOLDS.foot_blur_frac`,
+    0 = off) so the operator can override it from the app; `None` means the
+    default. With no `contact_y`, the backdrop is returned untouched.
     """
     T = THRESHOLDS
-    short = min(bg.size)
-    base_px = int(short * T.background_blur_frac)
-    base = bg.filter(ImageFilter.GaussianBlur(base_px)) if base_px > 0 else bg
     if contact_y is None:
-        return base
-
-    foot_px = int(short * T.foot_blur_frac)
-    if foot_px <= base_px:
-        return base
+        return bg
+    s = T.foot_blur_strength if strength is None else float(strength)
+    if s <= 0:
+        return bg
+    short = min(bg.size)
+    foot_px = int(round(short * T.foot_blur_frac * s))
+    if foot_px < 1:
+        return bg
     heavy = bg.filter(ImageFilter.GaussianBlur(foot_px))
 
-    h = bg.size[1]
+    w_img, h = bg.size
     cy = float(np.clip(contact_y, 0, h - 1))
-    span = max(h - cy, 1.0)
+    band = max(h * T.foot_blur_band, 4.0)
     yy = np.arange(h, dtype=np.float32)
-    t = np.clip((yy - cy) / span, 0.0, 1.0)
-    weight = (t * t * (3.0 - 2.0 * t))[:, None, None]  # smoothstep: 0 at feet, 1 at edge
-    base_arr = np.asarray(base, np.float32)
+    dy = (yy - cy) / band
+    # Windowed at 3 sigma so "untouched" means untouched: beyond it the
+    # weight is exactly 0, not a Gaussian tail that dithers the far frame
+    # by a level or two.
+    wy = np.where(np.abs(dy) < 3.0, np.exp(-0.5 * dy * dy), 0.0).astype(np.float32)
+    if contact_x is not None and contact_w:
+        xr = max(float(contact_w) * T.foot_blur_x_radius, 8.0)
+        xx = np.arange(w_img, dtype=np.float32)
+        dx = (xx - float(contact_x)) / xr
+        wx = np.where(np.abs(dx) < 3.0, np.exp(-0.5 * dx * dx), 0.0).astype(np.float32)
+    else:
+        wx = np.ones(w_img, np.float32)
+    weight = (wy[:, None] * wx[None, :])[..., None]
+    base_arr = np.asarray(bg, np.float32)
     heavy_arr = np.asarray(heavy, np.float32)
     out = base_arr * (1.0 - weight) + heavy_arr * weight
     # rint, not a bare astype: the blend of two identical values lands on
@@ -544,6 +595,9 @@ def compose(
     *,
     custom_backdrop: bool = False,
     floor_frac: float | None = None,
+    fill: float | None = None,
+    x_frac: float | None = None,
+    blur_strength: float | None = None,
 ):
     """Alpha-composite in linear light. Fractional alpha is honoured exactly.
 
@@ -553,18 +607,24 @@ def compose(
     it first and letting the paste's own alpha blend over it means the
     shadow only ever shows where there is no subject, which is exactly the
     area it exists to describe.
-    """
-    p_res, a_res, ox, oy = place(alpha, product, bg.size, floor_frac)
 
-    # A soft backdrop, sharp subject -- real depth of field, and the reason
-    # a perfectly crisp background reads as composited even with correct
-    # colour and a correct shadow. Blurred here, not baked into the
-    # backdrop render itself, so it scales with whatever resolution this
+    `floor_frac`, `fill`, `x_frac` and `blur_strength` are all `None` for
+    "decide automatically" -- the app's override controls set them.
+    """
+    p_res, a_res, ox, oy = place(alpha, product, bg.size, floor_frac, fill=fill, x_frac=x_frac)
+
+    # The backdrop is left as sharp as the subject everywhere except a
+    # feathered patch where the feet meet it -- see `soften_backdrop` for
+    # the two whole-frame designs that were tried and rejected first. Done
+    # here, per call, so the feather is sized to whatever resolution this
     # particular export actually is (`export` calls `compose` once per
-    # preset size) rather than being blurred relative to a size it isn't.
-    # Graduated: light everywhere, stronger in a band at the feet -- see
-    # `soften_backdrop`.
-    bg_srgb = _arr(soften_backdrop(bg, contact_y=oy + a_res.shape[0]))
+    # preset size).
+    contact = contact_band(a_res, ox, oy)
+    if contact is not None:
+        cx, cy, cw_ = contact
+        bg = soften_backdrop(bg, contact_y=cy, contact_x=cx, contact_w=cw_,
+                             strength=blur_strength)
+    bg_srgb = _arr(bg)
     canvas = srgb_to_linear(bg_srgb)
 
     shadow = contact_shadow(bg.size, a_res, ox, oy, key_dir)
@@ -581,6 +641,19 @@ def compose(
     return _img(linear_to_srgb(np.clip(canvas, 0, 1))), scene_alpha
 
 
+def _placement_overrides(ctx: Context) -> dict:
+    """The operator's (or the detector's) placement decisions, as `compose`
+    kwargs. One place, because `composite` and `export` both call
+    `compose` and an override honoured by one but not the other would
+    make the preview lie about the file."""
+    return dict(
+        floor_frac=ctx.extra.get("custom_floor_frac"),
+        fill=ctx.extra.get("subject_fill"),
+        x_frac=ctx.extra.get("subject_x"),
+        blur_strength=ctx.extra.get("seam_blur_strength"),
+    )
+
+
 @REGISTRY.register("composite")
 def composite(ctx: Context) -> Context:
     assert ctx.background is not None and ctx.product is not None and ctx.alpha is not None
@@ -588,7 +661,7 @@ def composite(ctx: Context) -> Context:
     is_custom = ctx.extra.get("custom_background") is not None
     out, scene_alpha = compose(
         ctx.background, ctx.product, ctx.alpha, key_dir, custom_backdrop=is_custom,
-        floor_frac=ctx.extra.get("custom_floor_frac"))
+        **_placement_overrides(ctx))
     ctx.composited = out
     ctx.composited_alpha = scene_alpha
     ctx.store.image("composite", "result", out)
@@ -659,7 +732,7 @@ def export(ctx: Context) -> Context:
         )
         out, _ = compose(
             canvas, ctx.product, ctx.alpha, key_dir, custom_backdrop=custom is not None,
-            floor_frac=ctx.extra.get("custom_floor_frac"))
+            **_placement_overrides(ctx))
         path = OUT_DIR / f"{stem}--{name}.jpg"
         out.save(path, "JPEG", quality=preset.quality, subsampling=1, optimize=True)
         ctx.exports[name] = str(path)

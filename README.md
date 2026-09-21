@@ -41,7 +41,7 @@ dominated by process/model-load overhead (~80-90s either way for a single
 photo) -- the GPU's win compounds across a batch, not a single image. See
 [TASK.md §1i](TASK.md).
 
-**88 tests, one command:** `.venv\Scripts\python.exe tests\run_all.py`
+**93 tests, one command:** `.venv\Scripts\python.exe tests\run_all.py`
 
 ---
 
@@ -133,6 +133,19 @@ shop's own photographs** — [TASK.md §5](TASK.md) says what a useful first set
 looks like.
 
 ---
+
+## No blur except the seam; a figure sized to the scene; overrides, 2026-09-21
+
+Three things reported on real output. The backdrop is now **never blurred
+as a whole** -- a sharp HD cutout on a uniformly soft scene reads as
+pasted, not in focus -- only a small feathered patch where the hem meets
+the ground, localised in both axes so it can't become a stripe across a
+floor (calibrated by eye against five variants; sheets in
+`work-reports/blur-calibration-2026-09-21/`). The figure is sized to the
+scene from where the floor starts: a wide room gets a smaller figure than
+a close drape. And the app places automatically by default with four
+overrides -- size, horizontal position, floor line, seam softening --
+mirrored on the CLI. Full account in [TASK.md §1m](TASK.md).
 
 ## Ground detection that knows what a floor is, 2026-09-20
 

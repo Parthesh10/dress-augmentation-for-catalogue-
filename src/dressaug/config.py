@@ -252,31 +252,30 @@ class Thresholds:
     harmonize_strength_custom: float = 0.08
     harmonize_gain_min_custom: float = 0.96
     harmonize_gain_max_custom: float = 1.04
-    #: A sharp, fully-in-focus backdrop is itself a "looks composited" cue --
-    #: real portrait photography almost always has some depth of field, with
-    #: the subject sharp and the background a little soft. Blur radius as a
-    #: fraction of the canvas's shorter side; the subject itself is never
-    #: touched, only the backdrop, before it's pasted behind.
+    # ---- the contact seam, 2026-09-21 ---------------------------------------
+    #: **No whole-frame blur.** Two earlier designs applied one (0.02, then
+    #: 0.004 of the shorter side, plus a ramp toward the bottom edge) and
+    #: both were rejected on real photographs -- the second by the operator
+    #: directly: a razor-sharp HD cutout on a uniformly soft backdrop reads
+    #: as pasted, not as in focus. The backdrop now stays as sharp as the
+    #: subject everywhere except a small feathered zone at the feet, which
+    #: is the only place a paste seam actually exists.
     #:
-    #: **Recalibrated 2026-09-20 after the first value was reported as far
-    #: too heavy** ("removing the background entirely"). The first value,
-    #: 0.02, mapped to a ~24px Gaussian radius on a 1200px canvas -- looked
-    #: at against a strip of radii on a real photograph, that is the point
-    #: where a room's plants and floorboards dissolve into colour fields.
-    #: 2-4px on a 600px side (0.4%) is where it reads as depth of field
-    #: while every object stays recognisable. That is the target here.
-    background_blur_frac: float = 0.004
-    #: A second, stronger blur the backdrop ramps toward *below* the
-    #: subject's feet, reaching full strength at the bottom edge of the
-    #: frame -- foreground depth of field, the floor between the subject
-    #: and the camera going soft. Asked for as "more blur near the feet";
-    #: built as a ramp to the edge rather than a band at the feet after
-    #: the band version put a visible stripe across floorboards and grass
-    #: (see `stages.soften_backdrop`). Radius as a fraction of the shorter
-    #: side. The contact line itself stays at the light overall blur, which
-    #: is also what a real photograph does: the floor at the subject's own
-    #: distance is in focus with the subject.
-    foot_blur_frac: float = 0.015
+    #: Radius of that feather, as a fraction of the canvas's shorter side.
+    #: Calibrated by eye against five variants on a herringbone floor
+    #: (`work-reports/blur-calibration-2026-09-21/`): 0.010-0.015 smeared
+    #: the boards into a visible band; 0.006 softened the seam and left the
+    #: boards legible. `foot_blur_strength` scales it (the app's override).
+    foot_blur_frac: float = 0.006
+    foot_blur_strength: float = 1.0
+    #: Vertical extent of the feather, as a fraction of canvas height
+    #: (Gaussian sigma around the contact line).
+    foot_blur_band: float = 0.04
+    #: Horizontal extent, as a multiple of the subject's own contact width
+    #: (Gaussian sigma around the contact centre). This is what keeps the
+    #: feather a patch under the feet rather than a stripe across the
+    #: frame: on a wide floor the far left and right are untouched.
+    foot_blur_x_radius: float = 0.8
 
     # ---- ground detection for custom backdrops, added 2026-09-20 ------------
     #: Every number here was set against the same 33 real photographed
@@ -311,6 +310,20 @@ class Thresholds:
     #: edge (the far wall), 1 = the bottom of the frame. 0.65 matched the
     #: by-eye floor lines within ~0.05 on the large majority of the 33.
     ground_feet_depth: float = 0.65
+    #: How big the subject is, per backdrop (2026-09-21). The same-size
+    #: subject in every backdrop was the reported problem: a wide room and
+    #: a tight drape are different distances from the camera. The cue is
+    #: where the floor *starts* (`ground_top`): floor from 30% down means
+    #: the camera is well back and a lot of room is in shot -- the person
+    #: should fill less of the frame; floor only in the bottom 15% means a
+    #: tight shot -- fill more. Linear between these two anchors, in the
+    #: same units as `garment_fill` (fraction of available height).
+    #: A backdrop with no visible floor (a drape, a wall) gets
+    #: `garment_fill` unchanged -- it's a studio-style tight shot.
+    scale_wide_ground_top: float = 0.30
+    scale_wide_fill: float = 0.62
+    scale_tight_ground_top: float = 0.85
+    scale_tight_fill: float = 0.88
 
     # ---- recolouring (phase 3 and 4) ---------------------------------------
     #: A recolour must not move lightness structure, only hue and chroma.

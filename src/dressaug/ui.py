@@ -105,8 +105,11 @@ def process(
     fabric_label: str,
     backdrop_name: str,
     custom_backdrop_path,
-    auto_floor: bool,
+    auto_place: bool,
+    fill_pct,
+    x_pct,
     floor_frac_pct,
+    blur_pct,
     preset_labels: list[str],
     progress=gr.Progress(),
 ):
@@ -154,10 +157,16 @@ def process(
         )
         if custom_backdrop is not None:
             ctx.extra["custom_background"] = custom_backdrop
-            if not auto_floor:
-                # Leaving this unset is what asks `stages.background` to
-                # run the ground detector; setting it is the manual override.
-                ctx.extra["custom_floor_frac"] = float(floor_frac_pct) / 100.0
+        if not auto_place:
+            # Leaving these unset is what asks `stages.background` to run
+            # the ground detector (floor line and size) and `compose` to
+            # use its defaults (position, seam softening). Setting them is
+            # the override -- all four together, so "manual" has one clear
+            # meaning: the sliders, exactly as they read.
+            ctx.extra["custom_floor_frac"] = float(floor_frac_pct) / 100.0
+            ctx.extra["subject_fill"] = float(fill_pct) / 100.0
+            ctx.extra["subject_x"] = float(x_pct) / 100.0
+            ctx.extra["seam_blur_strength"] = float(blur_pct) / 100.0
 
         steps = stages_for(cfg.graph)
         step_progress = {"ingest": 0.05, "matte": 0.15, "background": 0.55,
@@ -287,22 +296,40 @@ def build_process_tab() -> None:
                 )
                 custom_backdrop.change(
                     load_upload, [custom_backdrop], [custom_backdrop_preview])
-                auto_floor = gr.Checkbox(
+            with gr.Accordion("Placement -- automatic, with overrides", open=False):
+                auto_place = gr.Checkbox(
                     value=True,
-                    label="Find the floor automatically (recommended)",
-                    info="A scene-understanding model reads the photo for floor, "
-                         "grass, rug, stairs and the like, and plants the feet there. "
-                         "It also warns if the photo isn't a place a person could "
-                         "stand -- mostly sky, a table-height scene, a graphic. "
-                         "Untick to set the floor line yourself below.",
+                    label="Place automatically (recommended)",
+                    info="With a backdrop photo: a scene-understanding model finds "
+                         "the floor, grass, rug or stairs, plants the feet there, "
+                         "sizes the figure to how wide the shot is (a room gets a "
+                         "smaller figure than a close drape), and warns if the photo "
+                         "isn't a place a person could stand. With a preset: the "
+                         "ordinary defaults. Untick to set everything below yourself.",
+                )
+                fill_pct = gr.Slider(
+                    minimum=30, maximum=100, value=88, step=1,
+                    label="Size (% of the height above the floor line)",
+                    info="How tall the figure is in the frame. Smaller for a wide "
+                         "room; larger for a close backdrop.",
+                )
+                x_pct = gr.Slider(
+                    minimum=0, maximum=100, value=50, step=1,
+                    label="Horizontal position (% across, 50 = centred)",
                 )
                 floor_frac = gr.Slider(
                     minimum=0, maximum=100, value=95, step=1,
-                    label="Where's the floor? (% down the photo) -- manual override",
-                    info="Only used when automatic detection is unticked. "
-                         "95 = near the very bottom (a photo shot at floor level). "
-                         "Lower it for a backdrop whose own floor sits higher in "
-                         "frame — a raised porch, a table's edge, a staircase.",
+                    label="Floor line (% down the photo)",
+                    info="Where the feet land. 95 = near the very bottom (a photo "
+                         "shot at floor level). Lower it for a backdrop whose own "
+                         "floor sits higher in frame -- a porch, a staircase.",
+                )
+                blur_pct = gr.Slider(
+                    minimum=0, maximum=200, value=100, step=5,
+                    label="Seam softening at the feet (%, 0 = off)",
+                    info="A small feathered patch where the hem meets the ground -- "
+                         "the only place the backdrop is softened. Nothing else in "
+                         "the backdrop is ever blurred.",
                 )
             preset_defaults = _preset_choices()
             presets = gr.CheckboxGroup(
@@ -338,8 +365,8 @@ def build_process_tab() -> None:
 
     run_btn.click(
         process,
-        inputs=[image, upload, garment, fabric, backdrop, custom_backdrop, auto_floor,
-                floor_frac, presets],
+        inputs=[image, upload, garment, fabric, backdrop, custom_backdrop, auto_place,
+                fill_pct, x_pct, floor_frac, blur_pct, presets],
         outputs=[output, report, warnings],
     )
 

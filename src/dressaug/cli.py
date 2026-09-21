@@ -30,7 +30,8 @@ def use_utf8_console() -> None:
 def run_one(
     path: Path, cfg: JobConfig, backend: str = "local_cpu", *,
     quiet: bool = False, custom_backdrop: Path | None = None,
-    floor_frac: float | None = None,
+    floor_frac: float | None = None, fill: float | None = None,
+    x_frac: float | None = None, seam_blur: float | None = None,
 ):
     job_id = f"{path.stem[:24]}-{cfg.graph.value}"
     store = ArtifactStore(job_id)
@@ -46,8 +47,12 @@ def run_one(
         from PIL import Image, ImageOps
         ctx.extra["custom_background"] = ImageOps.exif_transpose(
             Image.open(custom_backdrop)).convert("RGB")
-        if floor_frac is not None:
-            ctx.extra["custom_floor_frac"] = floor_frac
+    # Placement overrides. None means "decide automatically"; see
+    # `stages._placement_overrides` for what each one reaches.
+    for key, val in (("custom_floor_frac", floor_frac), ("subject_fill", fill),
+                     ("subject_x", x_frac), ("seam_blur_strength", seam_blur)):
+        if val is not None:
+            ctx.extra[key] = val
 
     def progress(name, i, n):
         if not quiet:
@@ -79,6 +84,14 @@ def main(argv: list[str] | None = None) -> int:
                          "fraction of the photo's height from the top (e.g. 0.95 for "
                          "near the bottom). Set once per backdrop photo, by eye; "
                          "reused for every garment composited onto it")
+    ap.add_argument("--fill", type=float, default=None,
+                    help="how tall the figure is, as a fraction of the height above the "
+                         "floor line (default: from the backdrop, or 0.88)")
+    ap.add_argument("--x", type=float, default=None,
+                    help="horizontal centre of the figure, 0-1 (default 0.5)")
+    ap.add_argument("--seam-blur", type=float, default=None,
+                    help="strength of the feathered patch where the hem meets the ground, "
+                         "1.0 = default, 0 = off")
     a = ap.parse_args(argv)
 
     cfg = JobConfig(
@@ -96,7 +109,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"=== {a.path.name}  garment={cfg.garment.value} "
           f"fabric={cfg.resolved_fabric().value} "
           f"backdrop={a.custom_backdrop.name if a.custom_backdrop else cfg.background}")
-    m = run_one(a.path, cfg, custom_backdrop=a.custom_backdrop, floor_frac=a.floor_frac)
+    m = run_one(a.path, cfg, custom_backdrop=a.custom_backdrop, floor_frac=a.floor_frac,
+                fill=a.fill, x_frac=a.x, seam_blur=a.seam_blur)
     print(f"    status={m.status}  {m.total_seconds:.1f}s")
     for g in m.gates:
         print(f"    [{'ok' if g.passed else 'FAIL'}] {g.name}: {g.detail}")

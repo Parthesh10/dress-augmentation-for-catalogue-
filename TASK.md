@@ -1075,6 +1075,100 @@ a grounding fix succeeding or failing -- which §1k's own batch, in
 hindsight, had been trying to do.
 ---
 
+## 1m. No blur except the seam; a figure sized to the scene; overrides in the app, 2026-09-21
+
+### Three things reported on the §1l batch, in one pass
+
+1. **The blur was still too heavy, and the real problem was named
+   precisely:** a razor-sharp HD cutout on a uniformly softened backdrop
+   reads as *pasted*, not as *in focus*. Softening the whole frame -- at
+   any strength -- was the wrong idea, not just the wrong amount.
+2. **The figure was the same size in every backdrop.** A wide room and a
+   close drape are different distances from the camera; a person should
+   be smaller in the first.
+3. **The app should do all of this automatically, and let the operator
+   override any of it** -- size, position, floor line, softening.
+
+### The seam, and nothing else
+
+`soften_backdrop` is on its third design, and the first two are recorded
+in its docstring as rejected rather than deleted. It now applies **no
+whole-frame blur at all**. The backdrop stays as sharp as the subject
+everywhere -- which is what a real photograph at this scale looks like --
+except a small feathered patch where the hem meets the ground, the only
+place a paste seam actually exists. Localised in *both* axes: a Gaussian
+in y around the contact line and a broad Gaussian in x around the
+subject's own footprint, windowed at 3 sigma so "untouched" means
+untouched. The horizontal localisation is what finally kills the stripe
+across the floorboards that the first design produced: on a wide floor
+the far left and right of the frame are bit-identical to the input.
+
+Calibrated by eye, not by argument: five variants rendered on the same
+herringbone floor, zoomed at the hem
+(`work-reports/blur-calibration-2026-09-21/variants_feet_zoom.jpg`).
+Radii of 0.010-0.015 of the shorter side smeared the boards into a
+visible band; 0.006 softened the seam and left the boards legible. That
+is the default; the app's slider scales it, and 0 turns it off.
+
+The contact measurement (`contact_band`) was factored out so the shadow
+and the feather sit on one number and cannot drift apart -- the same
+reason `place` and the shadow already share `oy`.
+
+### A figure sized to the scene
+
+`ground.GroundEstimate.suggested_fill()`: the cue is where the floor
+*starts*. Floor from 30% down means the camera is well back and a lot of
+room is in shot -- the figure fills 62% of the available height; floor
+only in the bottom 15% means a tight shot -- 88%, the ordinary default.
+Linear between. A backdrop with no visible floor (a drape, a wall) is a
+studio-style tight shot and keeps the default. Rendered across a
+wide-to-tight run of seven real backdrops
+(`auto_scale_wide_to_tight.jpg`): staircase 0.62, texture wall 0.65,
+park 0.73, lawn 0.75, rug 0.81, room 0.86, drape default -- the
+ordering is right and, looked at, none of them is wrong.
+
+### Overrides in the app
+
+One "Place automatically" checkbox (default on) and four sliders --
+size, horizontal position, floor line, seam softening -- in a
+"Placement" accordion that applies to preset and custom backdrops alike.
+Automatic means: the ground detector decides floor and size for a custom
+photo, the defaults apply for a preset, the seam softens at its default.
+Manual means: the four sliders, exactly as they read, all together -- one
+clear meaning, not four independent toggles. The CLI has the same four as
+`--floor-frac`, `--fill`, `--x`, `--seam-blur`. All four reach the
+written manifest. `composite` and `export` take them through one helper
+(`_placement_overrides`) so the preview cannot disagree with the file.
+
+Driven the way a click does, not through Gradio's event loop
+(`app_auto_vs_manual_override.jpg`): auto puts her on the floor with the
+seam softened; manual at size 55%, x 25%, floor 70%, softening off puts
+her small, left, and floating on the wall -- deliberately wrong, to prove
+the sliders are obeyed rather than clamped toward sense.
+
+### Tests
+
+Five blur tests rewritten for the new contract at a **real export size**
+(a 300px toy fixture rounded the feather to 2px and measured nothing --
+the first version of these tests found that out): the top of the frame
+and the far edge of the contact row are bit-identical to the input; the
+contact point is measurably softer; the far side of the contact row is
+as sharp as the top (no stripe); strength 0 is off; no contact line is
+no change. Plus the size/position overrides move and resize the placed
+figure and never leave the canvas, and the scale rule orders a wide shot
+below a tight one and returns None for no floor. **93 tests total.**
+
+### What this does not claim
+
+The scale rule is a linear map from one cue with two anchors set by eye
+against seven backdrops. It gets the ordering right on those; a backdrop
+whose floor starts high for a reason other than distance (a low camera,
+a raked stage) would be sized as if it were wide. The slider exists for
+exactly that case. And the feather is a compositing device, not depth of
+field -- it hides a seam, it does not simulate a lens, and the docstring
+says so.
+---
+
 ## 2. What was inherited, and why
 
 | Taken | From | Why |

@@ -274,98 +274,83 @@ def test_compose_and_export_thread_the_backdrops_own_key_direction():
     assert src.count('ctx.extra.get("key_direction"') == 2
 
 
-def test_compose_softens_a_sharp_backdrop_but_never_the_subject():
-    """2026-09-20: a perfectly crisp backdrop is itself a "this is
-    composited" cue, independent of colour or grounding -- real portrait
-    photography has some depth of field. Checked on a high-frequency
-    checkerboard backdrop, away from where the subject lands: the composited
-    result must be measurably softer than the untouched input at the same
-    pixels. The subject's own pixels are a different check entirely
-    (`test_the_matte_stage_wires_decontamination_in` and the colour-fidelity
-    gate already guard those) -- this test only claims the backdrop softened,
-    not that the product did."""
-    size = (300, 450)
-    checker = np.zeros((size[1], size[0]), np.uint8)
-    checker[::2, ::2] = 255
-    checker[1::2, 1::2] = 255
-    bg = Image.fromarray(np.stack([checker] * 3, axis=-1), "RGB")
-
-    a_res = _standing_alpha()
-    product = Image.new("RGB", a_res.shape[::-1], (128, 128, 128))
-    out, scene_alpha = stages.compose(bg, product, a_res)
-
-    # A strip along the very top of the frame -- well clear of the standing
-    # figure's own placement -- to isolate the backdrop's own sharpness.
-    out_strip = np.asarray(out, np.float32)[:20, :, 0]
-    bg_strip = np.asarray(bg, np.float32)[:20, :, 0]
-    # High-frequency checker energy: mean absolute difference between
-    # adjacent pixels. Blur collapses this toward zero; an unmodified copy
-    # would keep it near 255.
-    out_energy = np.abs(np.diff(out_strip, axis=1)).mean()
-    bg_energy = np.abs(np.diff(bg_strip, axis=1)).mean()
-    assert out_energy < bg_energy * 0.9, (
-        f"expected the composited backdrop to be softer, got "
-        f"out_energy={out_energy:.1f} vs bg_energy={bg_energy:.1f}"
-    )
-
-
-def test_the_backdrop_ramps_softer_toward_the_bottom_edge_below_the_feet():
-    """Recalibrated 2026-09-20 after the first uniform blur was reported as
-    far too heavy ("removing the background entirely"), then reshaped
-    again after a band centred on the feet showed a visible stripe across
-    real floorboards and grass. The shape that survived looking at it:
-    sharp-ish at the contact line (the floor at the subject's own distance
-    is in focus with the subject), ramping softer toward the bottom edge
-    (foreground blur). Three strips of the same stripe field, in the same
-    call: top, contact line, bottom edge -- and the ordering between them
-    is the whole claim. Measured on `soften_backdrop` directly with a known
-    contact line, not through `compose`, so the subject's own pixels can't
-    confound the reading."""
-    size = (300, 450)
-    # 6px-wide vertical stripes, not a 1px checkerboard: a 1px checker is
-    # fully erased by even the lightest blur, leaving every region at ~zero
-    # energy with nothing left to compare (an earlier version of this test
-    # did exactly that and read 0.9 vs 1.1 -- a floor effect, not a
-    # measurement). Stripes this wide survive the light overall blur nearly
-    # intact and are clearly softened by the stronger one.
+def _stripe_field(size=(900, 1350)):
+    """6px vertical stripes at a *real export size*: the feather radius is a
+    fraction of the shorter side (0.006 -> ~5px here), and on a 300px toy
+    fixture it rounds to 2px and measures almost nothing -- the first
+    version of these tests found that out. Same regime the calibration
+    sheet used. Stripes this wide survive a light blur nearly intact and
+    are clearly softened by the feather. (A 1px checkerboard is erased by
+    any blur at all and measures nothing; an even earlier test learned
+    that the hard way.)"""
     xs = np.arange(size[0])
     stripes = ((xs // 6) % 2 * 255).astype(np.uint8)
     field = np.tile(stripes, (size[1], 1))
-    bg = Image.fromarray(np.stack([field] * 3, axis=-1), "RGB")
-
-    contact_y = 300
-    out = np.asarray(stages.soften_backdrop(bg, contact_y=contact_y), np.float32)[..., 0]
-
-    def energy(rows):
-        return float(np.abs(np.diff(rows, axis=1)).mean())
-
-    top = energy(out[:20])
-    at_feet = energy(out[contact_y - 10:contact_y + 10])
-    bottom = energy(out[-20:])
-    # The contact line should be no softer than the top -- it gets only the
-    # light overall blur, same as the top does.
-    assert abs(at_feet - top) < top * 0.15, (
-        f"the contact line should match the light overall blur, got "
-        f"feet={at_feet:.1f} vs top={top:.1f}"
-    )
-    # And the bottom edge should be clearly softer than both.
-    assert bottom < at_feet * 0.7, (
-        f"expected the bottom edge to be clearly softer than the contact "
-        f"line, got bottom={bottom:.1f} vs feet={at_feet:.1f}"
-    )
+    return Image.fromarray(np.stack([field] * 3, axis=-1), "RGB")
 
 
-def test_soften_backdrop_is_only_the_light_blur_with_no_contact_line():
-    """No placed subject means no feet band -- only the overall softening,
-    so a caller that just wants the depth-of-field look with nothing placed
-    gets exactly that and nothing extra."""
-    bg = Image.new("RGB", (300, 450), (120, 120, 120))
-    a = np.asarray(stages.soften_backdrop(bg, contact_y=None), np.float32)
-    b = np.asarray(stages.soften_backdrop(bg, contact_y=400), np.float32)
-    # On a flat field both are identical -- there's nothing to blur -- which
-    # is exactly the invariant: the band must never *add* anything on its
-    # own, only soften what's already there.
-    assert np.abs(a - b).max() < 1.0
+def _energy(rows):
+    return float(np.abs(np.diff(rows.astype(np.float32), axis=1)).mean())
+
+
+_FEET = dict(contact_y=1200, contact_x=450, contact_w=180)
+
+
+def test_the_backdrop_is_untouched_away_from_the_feet():
+    """2026-09-21, the third design: **no whole-frame blur.** Two earlier
+    versions softened the whole backdrop and were rejected on real
+    photographs -- a razor-sharp HD cutout on a uniformly soft scene reads
+    as pasted, not as in focus. The top of the frame and the far sides of
+    the floor must now be bit-identical to the input."""
+    bg = _stripe_field()
+    out = np.asarray(stages.soften_backdrop(bg, **_FEET))
+    src = np.asarray(bg)
+    assert np.array_equal(out[:900], src[:900]), "the top two-thirds must be untouched"
+    # Far left/right of the contact row. The feather is a Gaussian windowed
+    # at 3 sigma (x sigma = 0.8 * contact_w = 144px here), so beyond
+    # x < 450-432 = 18 it is exactly zero, and the strip 18..60 sits at
+    # 2.7-3.0 sigma where the weight is under 3% -- a residual of at most a
+    # few levels on a full-contrast stripe, imperceptible. Pinned as such
+    # rather than as bit-identical, which a Gaussian can't honestly promise
+    # inside its own window.
+    assert np.array_equal(out[1140:1260, :18], src[1140:1260, :18])
+    assert np.abs(out[1140:1260, :60].astype(int) - src[1140:1260, :60].astype(int)).max() <= 8
+    assert np.array_equal(out[1140:1260, -18:], src[1140:1260, -18:])
+
+
+def test_the_backdrop_is_softened_right_at_the_feet():
+    """And at the contact point itself -- the one place a paste seam
+    exists -- it must be measurably softer than the same stripes at the
+    top of the frame."""
+    bg = _stripe_field()
+    out = np.asarray(stages.soften_backdrop(bg, **_FEET))
+    top = _energy(out[:60, 360:540])
+    feet = _energy(out[1176:1224, 360:540])
+    assert feet < top * 0.7, f"expected the seam softened, got feet={feet:.1f} top={top:.1f}"
+
+
+def test_the_feather_is_a_patch_under_the_feet_not_a_stripe_across_the_frame():
+    """The horizontal localisation is what stops this being the stripe
+    across the floorboards that killed the first design: at the contact
+    row, the far side of the frame must stay as sharp as the top."""
+    bg = _stripe_field()
+    out = np.asarray(stages.soften_backdrop(bg, contact_y=1200, contact_x=180, contact_w=120))
+    top = _energy(out[:60, 720:900])
+    far_side_at_feet = _energy(out[1176:1224, 720:900])
+    assert abs(far_side_at_feet - top) < top * 0.05, (
+        f"far side of the contact row should be untouched, got {far_side_at_feet:.1f} vs {top:.1f}")
+
+
+def test_blur_strength_zero_turns_the_feather_off_entirely():
+    """The app's override: 0 must mean off, bit-identical to the input."""
+    bg = _stripe_field()
+    out = stages.soften_backdrop(bg, strength=0, **_FEET)
+    assert np.array_equal(np.asarray(out), np.asarray(bg))
+
+
+def test_no_contact_line_means_no_change_at_all():
+    bg = _stripe_field()
+    assert np.array_equal(np.asarray(stages.soften_backdrop(bg, contact_y=None)), np.asarray(bg))
 
 
 # --------------------------------------------------------------- harmonize
@@ -604,6 +589,26 @@ def test_floor_frac_overrides_the_default_bottom_margin():
         f"expected the feet at y={size[1] * 0.5:.0f} (50% down the frame), "
         f"got {feet_y}"
     )
+
+
+def test_fill_and_x_overrides_move_and_resize_the_subject():
+    """2026-09-21: the app's placement overrides. A smaller `fill` must
+    yield a shorter placed figure; `x_frac` must move its centre."""
+    size = (400, 600)
+    alpha = np.zeros((size[1], size[0]), np.float32)
+    alpha[40:560, 150:250] = 1.0
+    product = Image.new("RGB", size, (120, 60, 90))
+
+    big = stages.place(alpha, product, size, 0.9)
+    small = stages.place(alpha, product, size, 0.9, fill=0.5)
+    assert small[0].size[1] < big[0].size[1] * 0.7
+
+    left = stages.place(alpha, product, size, 0.9, x_frac=0.2)
+    right = stages.place(alpha, product, size, 0.9, x_frac=0.8)
+    assert left[2] < big[2] < right[2]
+    # And never off the canvas, whatever x_frac asks for.
+    edge = stages.place(alpha, product, size, 0.9, x_frac=1.0)
+    assert edge[2] + edge[0].size[0] <= size[0]
 
 
 def test_floor_frac_of_none_keeps_the_ordinary_bottom_margin_behaviour():

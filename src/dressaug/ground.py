@@ -153,12 +153,34 @@ class GroundEstimate:
     #: or None for "no floor visible; default placement" (which is *not* the
     #: same as unusable, see the module docstring).
     floor_frac: float | None
+    #: Where the ground region *starts* (its far edge), as a fraction of
+    #: height -- None when no floor was found. This is the scale cue: see
+    #: `suggested_fill`.
+    ground_top: float | None = None
     ground_frac: float = 0.0
     sky_water_frac: float = 0.0
     furniture_frac: float = 0.0
     graphic_frac: float = 0.0
     top_classes: list = field(default_factory=list)
     device: str | None = None
+
+    def suggested_fill(self) -> float | None:
+        """How much of the available height the subject should fill in
+        this backdrop, or None for "use the ordinary default".
+
+        Floor starting high in the frame means the camera is well back
+        and a lot of the room is in shot; the person should be smaller.
+        Floor only at the bottom means a tight shot; larger. Linear between
+        `Thresholds.scale_wide_*` and `scale_tight_*`. No floor at all (a
+        drape, a plain wall) is a studio-style tight shot -- default.
+        """
+        if self.ground_top is None:
+            return None
+        T = THRESHOLDS
+        t = (self.ground_top - T.scale_wide_ground_top) / max(
+            T.scale_tight_ground_top - T.scale_wide_ground_top, 1e-6)
+        t = min(max(t, 0.0), 1.0)
+        return T.scale_wide_fill + t * (T.scale_tight_fill - T.scale_wide_fill)
 
 
 def judge(raw: dict) -> GroundEstimate:
@@ -183,7 +205,7 @@ def judge(raw: dict) -> GroundEstimate:
         ff = top_ + T.ground_feet_depth * (1.0 - top_)
         return GroundEstimate(
             True, f"floor found from {top_:.0%} down ({g:.0%} of frame)",
-            float(min(max(ff, 0.0), 1.0)), **common)
+            float(min(max(ff, 0.0), 1.0)), ground_top=float(top_), **common)
     return GroundEstimate(
         True, "no floor visible -- standing in front of it at the default placement",
         None, **common)

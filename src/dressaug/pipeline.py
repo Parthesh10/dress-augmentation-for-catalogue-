@@ -230,6 +230,9 @@ DIAGNOSTIC_KEYS = (
     "ground_verdict",
     "ground_usable",
     "custom_floor_frac",
+    "subject_fill",
+    "subject_x",
+    "seam_blur_strength",
 )
 
 
