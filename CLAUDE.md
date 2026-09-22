@@ -2,10 +2,10 @@
 
 This file exists so a new conversation doesn't need to re-derive context
 from scratch. Full detail, every fix with its evidence, lives in
-**TASK.md** (working log, chronological, §1a through §1t so far) and
+**TASK.md** (working log, chronological, §1a through §1w so far) and
 **README.md** (current-state summary). Read TASK.md's most recent
 sections first if you need the reasoning behind a decision, not just the
-decision. **Start a new session by reading §1o through §1t** (2026-09-22)
+decision. **Start a new session by reading §1o through §1w** (2026-09-22)
 -- that's one long, dense working session and the "Next actionables"
 section just below is the direct continuation of it.
 
@@ -38,9 +38,9 @@ Picking up directly from the end of the 2026-09-22 session:
    per-photo free-text notes panel shown alongside the existing sliders
    after processing. (Backdrop-count growth toward "100" is no longer the
    direction -- see §1v below: the Plain procedural library was cut from
-   40 to 1 by explicit request, and the real photo library, currently 12
-   Studio+Nature, is now the primary growth path if more backdrop variety
-   is wanted.)
+   40 to 1 by explicit request, and the real photo library, currently 18
+   Studio+Nature (§1w), is now the primary growth path if more backdrop
+   variety is wanted.)
 4. **Not a bug, don't re-investigate**: a "floating fragment" reported
    on a real composite (`IMG_8325`) turned out to be a real cord/
    drawstring hanging from the actual garment, confirmed against the
@@ -108,15 +108,17 @@ for directly) since 2026-09-22, not the Gradio default — see §1r.
 (one procedural preset, `studio_ivory`, white/neutral — cut from 40 on
 2026-09-22, §1v), and **Studio**/**Nature** (real photographs, saved to
 `data/backdrop_library/`, gitignored,
-content-hashed). 12 real Studio/Nature photos already in the library,
-sourced from Pexels under the Pexels Licence — provenance and photo IDs
-in `data/backdrop_library/PROVENANCE.md`. Upload your own in either tab
+content-hashed). 18 real Studio/Nature photos already in the library
+(12 + 6 more added 2026-09-22, §1w), sourced from Pexels under the Pexels
+Licence — provenance and photo IDs in `data/backdrop_library/
+PROVENANCE.md`. Upload your own in either tab
 ("Or use your own backdrop photo" / "Also compare against your own
 backdrop photos"), pick Studio or Nature, and it's saved permanently —
 pickable by name or by eye in every run after, across restarts, until
 removed in the Process tab's "Your saved backdrop photos" accordion.
-**A Pinterest board was named as a source and declined** — see "Business
-context" below and TASK.md §1s for why, before re-raising it.
+**A Pinterest board (plus general web search) has been named as a source
+and declined three times now** — see "Business context" below and
+TASK.md §1s/§1w for why, before re-raising it.
 
 ### What's actually built, briefly (see TASK.md for the full story on each)
 
@@ -230,6 +232,75 @@ is the same one that gated this exception in the first place: does it stay
 subtle/positive, or does it risk regenerating design detail? Test on real
 photos and measure before trusting, same as every other fix here.
 
+### Optional manual finishing pass: Gemini/"Nano Banana"
+
+Not integrated into the pipeline — a deliberate choice, not an oversight.
+This is a manual, external, per-image step the operator can run themselves
+(paste a finished pipeline output into Gemini's image-editing UI/API) if a
+particular photo still needs the last mile of photographic cohesion after
+the deterministic pipeline (contact shadow, exposure/tint match, seam blur,
+finishing grain/contrast/vignette — see "What's actually built" above) has
+already run. It is a refinement pass on an already-composited image, not a
+compositing tool in its own right, and the prompt below is written with
+that framing on purpose.
+
+The generic prompt, refined 2026-09-23 from an operator draft, reusable
+across any output image regardless of garment or backdrop:
+
+> You are performing a photographic realism pass on a studio catalogue
+> image. A person wearing a garment has already been professionally
+> composited onto a background — cut out, placed, lit, and shadowed. Your
+> only job is to make the final 2-3% of integration invisible, the way a
+> photo retoucher would, not to re-render or reinterpret the image.
+>
+> DO:
+> - Unify white balance and color temperature between subject and
+>   background so they read as lit by the same light source.
+> - Match exposure and local contrast between subject and background —
+>   neither should look brighter, flatter, or more saturated than its
+>   surroundings.
+> - Refine the contact shadow where the feet/hem meet the ground: soft,
+>   correct density, consistent with the scene's existing light direction —
+>   strengthen or soften it only if it currently looks disconnected or
+>   absent, not replace the scene's own shadow logic with a new one.
+> - Smooth any remaining hard-edged cutout lines, especially fine detail
+>   like loose hair strands, dupatta/scarf edges, or sheer fabric — blend,
+>   don't redraw.
+> - Match grain, sharpness, and depth-of-field falloff between subject and
+>   background so nothing reads as "pasted," including subtle ambient
+>   occlusion where the figure meets the ground or a nearby wall.
+> - Keep the result looking like an unedited photograph: no glossy "AI
+>   skin," no added lens flare, bokeh, or vignette beyond what's already
+>   present.
+>
+> DO NOT, under any circumstances:
+> - Do not change the garment in any way: colour, pattern, print,
+>   embroidery, zari/sequin work, fabric texture, drape, folds, fit, or
+>   silhouette must be pixel-for-pixel the same design as the input.
+> - Do not change the person: face, identity, skin tone, expression,
+>   hairstyle, body proportions, pose, hand position, or jewellery.
+> - Do not change the background/backdrop's own content — no added,
+>   removed, or altered objects, no repainting the scene. You may only
+>   adjust how the subject's lighting integrates with it, never what it
+>   depicts.
+> - Do not change the framing, crop, aspect ratio, or output resolution.
+> - Do not add anything that was not in the original image — no props, no
+>   reflections, no extra shadows unrelated to the existing light source.
+>
+> If you are ever unsure whether a change would alter the product's true
+> appearance, do not make that change. The garment and the person are the
+> product being sold — they must remain exactly as photographed. Only the
+> photographic integration between subject and background may be touched.
+
+This is deliberately more exhaustive and pixel-specific than the operator's
+own first draft — diffusion-based editors are known to drift on exactly the
+categories spelled out here (identity, fine embroidery/print detail,
+background content) unless told not to in explicit, enumerated terms rather
+than a general "don't change the product." If this workflow gets used
+enough to justify automating, the same "never fabricate the product" rule
+above governs it — test on real photos and measure before trusting, same as
+everything else in this file.
+
 ## Business context
 
 Catalogue business, Indian ethnic wear (Raah Boutique — see the shared
@@ -239,16 +310,18 @@ for copyright reasons). Target volume: ~200 images to start, then 2-3/month
 ongoing. That low steady-state volume is *why* per-image subscription
 services were a bad fit and why the free pipeline is the right call for now.
 
-**The Pinterest board question came up again directly, 2026-09-22** —
-asked explicitly to download it (plus general web search) for backdrop
-photos, told not to worry about the copyright risk. Declined, same
-reasoning as above, made explicit this time in TASK.md §1s: downloading
-and shipping someone else's copyrighted photography in a commercial
-product is an act, not just advice, and "I'll take the risk" reassigns
-liability without changing what the act is. Sourced real backdrop photos
-from Pexels instead (explicit commercial-use licence, documented in
-`data/backdrop_library/PROVENANCE.md`) — if this is raised a third time,
-the answer is the same; point to §1s rather than re-litigating it.
+**The Pinterest board question has now come up three times, 2026-09-22** —
+first as a reference (§1j/§1k), then asked explicitly to download it (plus
+general web search) for backdrop photos, told not to worry about the
+copyright risk (§1s) — declined, same reasoning: downloading and shipping
+someone else's copyrighted photography in a commercial product is an act,
+not just advice, and "I'll take the risk" reassigns liability without
+changing what the act is. Raised a third time in the same wording
+("download... from web... like from [the board]... and else") — declined
+again, unchanged reasoning, and 6 more real photos sourced from Pexels
+instead (§1w; library now 18, up from the original 12 in §1s). **If this
+is raised a fourth time, the answer is still the same** — point to §1s and
+§1w rather than re-litigating it.
 
 ## Private data — never commit, never publish
 
