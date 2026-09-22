@@ -68,7 +68,18 @@ if not exist ".venv\Scripts\python.exe" (
     echo App already installed.
 )
 
-if not exist ".venv-torch\Scripts\python.exe" (
+rem Checking the interpreter file exists isn't enough -- a torch install can
+rem fail partway through (a retired CUDA wheel channel did exactly this on a
+rem real run) and still leave python.exe sitting there, which would make
+rem every future run wrongly call it "already installed" and never retry.
+rem So the real check is whether torch actually imports.
+set "TORCH_OK=0"
+if exist ".venv-torch\Scripts\python.exe" (
+    ".venv-torch\Scripts\python.exe" -c "import torch" >nul 2>&1
+    if not errorlevel 1 set "TORCH_OK=1"
+)
+
+if "%TORCH_OK%"=="0" (
     echo.
     echo Installing the AI models ^(multi-GB, one-time, can take a while^) ...
     powershell -NoProfile -ExecutionPolicy Bypass -File install-torch.ps1
@@ -78,6 +89,23 @@ if not exist ".venv-torch\Scripts\python.exe" (
     )
 ) else (
     echo AI models already installed.
+)
+
+if not exist "%USERPROFILE%\Desktop\Dress Studio.lnk" (
+    echo.
+    echo Creating a desktop shortcut ...
+    > "%TEMP%\dressstudio_shortcut.ps1" (
+        echo $ws = New-Object -ComObject WScript.Shell
+        echo $s = $ws.CreateShortcut^("$env:USERPROFILE\Desktop\Dress Studio.lnk"^)
+        echo $s.TargetPath = "powershell.exe"
+        echo $s.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "%APP_DIR%\run.ps1"'
+        echo $s.WorkingDirectory = "%APP_DIR%"
+        echo $s.IconLocation = "imageres.dll,174"
+        echo $s.Save^(^)
+    )
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%TEMP%\dressstudio_shortcut.ps1"
+    del "%TEMP%\dressstudio_shortcut.ps1" >nul 2>&1
+    echo Shortcut created -- next time, just double-click "Dress Studio" on your desktop.
 )
 
 echo.

@@ -22,9 +22,11 @@ need to do:
    downloading, not something you need to interact with.
 4. When it's done, your browser opens the app automatically.
 
-**To use it again later**, just double-click the same `.bat` again — it
-skips everything already installed and goes straight to opening the app
-(a few seconds).
+**A "Dress Studio" shortcut is created on your desktop the first time it
+finishes** — use that from then on instead of hunting for the `.bat` file
+again. (Double-clicking the `.bat` again also still works — it skips
+everything already installed and goes straight to opening the app, a few
+seconds.)
 
 **Keep the black window open while you work** — closing it stops the app.
 

@@ -41,26 +41,67 @@ if (-not (Test-Path ".venv-torch")) {
 }
 
 $hasNvidiaGpu = $null -ne (Get-Command nvidia-smi -ErrorAction SilentlyContinue)
+$py = ".venv-torch\Scripts\python.exe"
+& $py -m pip install --upgrade pip --quiet
+
+#: PyTorch retires old CUDA wheel channels as new CUDA versions ship, so a
+#: single hardcoded index (this used to just say "cu121") silently stops
+#: matching anything on a newer torch/Python combination -- found on a real
+#: run: pip printed "from versions: none" and the script barely noticed,
+#: because transformers/numpy/pillow installed fine on top of a venv that
+#: was missing torch entirely. Try a short list of recent channels instead,
+#: newest first, and only fall back to CPU once every one of them has
+#: genuinely failed to resolve -- not guessed once and trusted.
+$cudaIndexes = @(
+    "https://download.pytorch.org/whl/cu128",
+    "https://download.pytorch.org/whl/cu126",
+    "https://download.pytorch.org/whl/cu124",
+    "https://download.pytorch.org/whl/cu121"
+)
+
+$torchInstalled = $false
 if ($hasNvidiaGpu) {
-    Write-Host "NVIDIA GPU detected (nvidia-smi found) -- installing the CUDA build of torch."
-    $torchIndex = "https://download.pytorch.org/whl/cu121"
+    foreach ($index in $cudaIndexes) {
+        Write-Host "NVIDIA GPU detected -- trying the CUDA build of torch from $index ..."
+        & $py -m pip install torch torchvision --index-url $index
+        if ($LASTEXITCODE -eq 0) { $torchInstalled = $true; break }
+        Write-Host "That channel didn't have a matching build -- trying the next one."
+    }
+    if (-not $torchInstalled) {
+        Write-Host "No CUDA channel had a matching build for this Python version -- falling back to CPU."
+    }
 } else {
-    Write-Host "No NVIDIA GPU detected -- installing the CPU build of torch."
-    Write-Host "(If this machine does have an NVIDIA card, its driver may not be installed"
-    Write-Host "or up to date -- nvidia-smi.exe wasn't found on PATH. The app still works"
-    Write-Host "fully on CPU, just slower per photo.)"
-    $torchIndex = "https://download.pytorch.org/whl/cpu"
+    Write-Host "No NVIDIA GPU detected (nvidia-smi not found on PATH) -- installing the CPU build."
 }
 
-Write-Host "Installing torch, transformers, torchvision, numpy, pillow ..."
-Write-Host "This is a multi-GB download and can take several minutes on a slow connection."
-& ".venv-torch\Scripts\python.exe" -m pip install --upgrade pip --quiet
-& ".venv-torch\Scripts\python.exe" -m pip install torch torchvision --index-url $torchIndex
-& ".venv-torch\Scripts\python.exe" -m pip install transformers numpy pillow
+if (-not $torchInstalled) {
+    & $py -m pip install torch torchvision --index-url "https://download.pytorch.org/whl/cpu"
+    if ($LASTEXITCODE -eq 0) { $torchInstalled = $true }
+}
+
+if (-not $torchInstalled) {
+    Write-Error "torch failed to install from every channel tried (CUDA and CPU). Check the pip output above -- this is usually a Python version torch doesn't have a wheel for yet."
+    exit 1
+}
+
+Write-Host "Installing transformers, numpy, pillow ..."
+& $py -m pip install transformers numpy pillow
+
+#: The real check, not just "did pip print success" -- confirms torch is
+#: actually importable in this venv before calling the install done, so a
+#: partial failure here can never look identical to a real success on the
+#: next run (install-torch.ps1 is only skipped if this exact check already
+#: passed once -- see below).
+Write-Host "Verifying torch actually imports ..."
+& $py -c "import torch; print('torch', torch.__version__, '-- CUDA available:', torch.cuda.is_available())"
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "torch installed but does not import cleanly -- see the error above. Delete .venv-torch and re-run this script."
+    exit 1
+}
 
 Write-Host ""
 Write-Host "=================================================================="
-Write-Host "Torch install done. dressaug will find .venv-torch automatically --"
-Write-Host "no environment variable or config change needed. Run the app with:"
-Write-Host "    .\run.ps1"
+Write-Host "Torch install done and verified. dressaug will find .venv-torch"
+Write-Host "automatically -- no environment variable or config change needed."
+Write-Host "Run the app with:  .\run.ps1"
 Write-Host "=================================================================="
