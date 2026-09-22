@@ -167,14 +167,24 @@ rem instead of a window close -- there is no window to close any more.
 rem Verified this detaches for real before relying on it: a disposable test
 rem process outlived its own launching .bat by design, confirmed by a
 rem delayed file write happening after the launcher had already exited.
+rem DRESSAUG_AUTO_SHUTDOWN, set here and inherited by the detached child
+rem below (Windows processes inherit their parent's environment block by
+rem default -- no extra plumbing needed): tells ui.py to also stop itself
+rem automatically a short while after every browser tab showing it is
+rem closed, on top of the "Stop Dress Studio" shortcut. Only set for this
+rem packaged launch path, not for `run.ps1`/`python -m dressaug.ui` run
+rem directly -- see ui.py's own comment on `_AUTO_SHUTDOWN` for why a
+rem plain development run must not have this.
 > "%TEMP%\dressstudio_launch.ps1" (
+    echo $env:DRESSAUG_AUTO_SHUTDOWN = "1"
     echo Start-Process powershell -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File "%APP_DIR%\run.ps1"' -WindowStyle Hidden
 )
 powershell -NoProfile -ExecutionPolicy Bypass -File "%TEMP%\dressstudio_launch.ps1"
 del "%TEMP%\dressstudio_launch.ps1" >nul 2>&1
 echo Your browser will open automatically in a few seconds, once the server
 echo actually answers. Dress Studio keeps running after you close this
-echo window -- use the "Stop Dress Studio" desktop shortcut when you're done.
+echo window, but stops on its own about 15 seconds after every browser tab
+echo showing it is closed -- or use the "Stop Dress Studio" shortcut sooner.
 echo.
 pause
 goto :eof

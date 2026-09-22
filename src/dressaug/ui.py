@@ -14,9 +14,11 @@ rather than by reading a doc.
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import tempfile
+import threading
 import time
 import traceback
 from pathlib import Path
@@ -1022,8 +1024,49 @@ _CSS = """
 """
 
 
+#: Closing the browser tab (or the whole browser, or a laptop lid) should
+#: stop the server -- asked for directly, 2026-09-23, right after the
+#: *previous* request that the server keep running independent of any
+#: terminal window. Reconciled by making the browser tab itself the thing
+#: that's tracked, via `gr.Timer`: its tick is driven by a `setInterval` in
+#: the page's own JS (confirmed by reading the compiled component source,
+#: not assumed), so it only ever fires while a tab actually has the page
+#: open -- closing the tab stops the JS, which stops the ticks, with no
+#: custom endpoint or injected JS of this project's own needed.
+#:
+#: A grace period, not an instant kill on missing one tick: a page refresh
+#: also briefly stops ticks (old page unloads before the new one's JS
+#: starts), and an instant shutdown would kill the server on every
+#: accidental refresh. `_HEARTBEAT_GRACE_SECONDS` is comfortably longer
+#: than a normal reload takes.
+#:
+#: Off by default, on only when `DRESSAUG_AUTO_SHUTDOWN` is set --
+#: DressStudioSetup.bat's detached launch sets it, a plain `run.ps1` or
+#: `python -m dressaug.ui` (development, including this project's own
+#: testing loop, which checks the server directly without a tab open half
+#: the time) does not. Without that split, every dev session would die the
+#: moment nobody happened to have a browser tab open for 15 seconds.
+_HEARTBEAT_GRACE_SECONDS = 15
+_AUTO_SHUTDOWN = bool(os.environ.get("DRESSAUG_AUTO_SHUTDOWN"))
+_last_heartbeat = time.time()
+
+
+def _record_heartbeat() -> None:
+    global _last_heartbeat
+    _last_heartbeat = time.time()
+
+
+def _shutdown_watchdog() -> None:
+    while True:
+        time.sleep(3)
+        if time.time() - _last_heartbeat > _HEARTBEAT_GRACE_SECONDS:
+            os._exit(0)
+
+
 def build() -> gr.Blocks:
     with gr.Blocks(title="Dress Studio") as demo:
+        heartbeat = gr.Timer(3)
+        heartbeat.tick(_record_heartbeat, inputs=None, outputs=None)
         gr.HTML(
             '<div class="dress-header">'
             "<h1>🪡 Dress Studio</h1>"
@@ -1043,6 +1086,11 @@ def build() -> gr.Blocks:
 
 
 def main() -> None:
+    if _AUTO_SHUTDOWN:
+        # Daemon so it never blocks process exit on its own; `_last_heartbeat`
+        # is set to "now" at import time (above), which is what gives a real
+        # first browser load the full grace period rather than racing it.
+        threading.Thread(target=_shutdown_watchdog, daemon=True).start()
     # Gradio 6 moved `theme`/`css` from the `Blocks` constructor to
     # `launch()` -- passed here, not in `build()`, so `build()` stays
     # exactly what every test calls directly, launch-independent.
