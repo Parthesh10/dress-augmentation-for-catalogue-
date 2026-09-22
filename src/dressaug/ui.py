@@ -547,32 +547,51 @@ def load_upload(file_path: str | None):
 def build_process_tab() -> None:
     with gr.Row():
         with gr.Column(scale=2):
-            upload = gr.File(
-                label="Dress photograph",
-                file_types=["image", ".heic", ".heif"],
-                height=120,
-            )
-            image = gr.Image(
-                label="Preview", type="pil", height=340, interactive=False,
-            )
-            upload.change(load_upload, [upload], [image])
-            with gr.Row():
-                garment = gr.Dropdown(
-                    _garment_choices(), value=_GARMENT_LABELS[Garment.PARTY_DRESS],
-                    label="Garment type",
+            #: The required path, start to finish, grouped into one visual
+            #: card so it reads as "the form" -- everything optional (a
+            #: custom backdrop, saved-photo management, manual placement
+            #: overrides) lives below it instead of interleaved with it.
+            #: Added 2026-09-23: reported directly as "too many options,
+            #: unclear what does what" once every accordion in this tab had
+            #: accumulated -- numbered steps and one bordered group are the
+            #: fix, not a rewrite of what any control does.
+            gr.Markdown("#### ① Your photograph")
+            with gr.Group():
+                upload = gr.File(
+                    label="Dress photograph",
+                    file_types=["image", ".heic", ".heif"],
+                    height=120,
                 )
-                fabric = gr.Dropdown(
-                    _fabric_choices(), value=_AUTO_FABRIC,
-                    label="Fabric",
-                    info="Auto picks a sensible default for the garment type. "
-                         "Set it explicitly for a sheer/net/lace piece.",
+                image = gr.Image(
+                    label="Preview", type="pil", height=340, interactive=False,
                 )
-            backdrop = gr.Radio(
-                [(label, value) for _, label, value in _combined_backdrop_entries()],
-                value="studio_ivory", label="Backdrop",
-                info="Pick by eye in the gallery on the right, or by name here.",
+                upload.change(load_upload, [upload], [image])
+                with gr.Row():
+                    garment = gr.Dropdown(
+                        _garment_choices(), value=_GARMENT_LABELS[Garment.PARTY_DRESS],
+                        label="Garment type",
+                    )
+                    fabric = gr.Dropdown(
+                        _fabric_choices(), value=_AUTO_FABRIC,
+                        label="Fabric",
+                        info="Auto picks a sensible default for the garment type. "
+                             "Set it explicitly for a sheer/net/lace piece.",
+                    )
+
+            gr.Markdown("#### ② Backdrop")
+            with gr.Group():
+                backdrop = gr.Radio(
+                    [(label, value) for _, label, value in _combined_backdrop_entries()],
+                    value="studio_ivory", label="Backdrop",
+                    info="Pick by eye in the gallery on the right, or by name here.",
+                )
+
+            gr.Markdown(
+                "#### ③ Optional -- fine-tune\n"
+                "Everything in this section has a sensible default. Open one "
+                "only if you need it."
             )
-            with gr.Accordion("Or use your own backdrop photo", open=True):
+            with gr.Accordion("Use your own backdrop photo instead", open=False):
                 gr.Markdown(
                     "Upload a photograph — your own venue, your own decor "
                     "setup, or stock you've actually licensed for commercial "
@@ -601,7 +620,7 @@ def build_process_tab() -> None:
                 custom_backdrop.change(
                     load_upload, [custom_backdrop], [custom_backdrop_preview],
                 )
-            with gr.Accordion("Your saved backdrop photos", open=True):
+            with gr.Accordion("Your saved backdrop photos", open=False):
                 gr.Markdown(
                     "Every photo you've uploaded above, on this machine, across "
                     "every session. Remove one you no longer want offered."
@@ -692,13 +711,6 @@ def build_process_tab() -> None:
                          "This is what makes the figure and the backdrop read as "
                          "one photograph instead of two separately-lit pieces.",
                 )
-            preset_defaults = _preset_choices()
-            presets = gr.CheckboxGroup(
-                preset_defaults,
-                value=[p for p in preset_defaults if p.startswith("portrait_2x3")
-                       or p.startswith("web_card_3x4")],
-                label="Export sizes",
-            )
             with gr.Accordion("Recolour (coming soon)", open=False):
                 gr.Markdown(
                     "**Not built yet — Phase 3 of the roadmap.** This will let "
@@ -707,7 +719,16 @@ def build_process_tab() -> None:
                     "does anything today."
                 )
                 gr.ColorPicker(label="Target colour", interactive=False)
-            run_btn = gr.Button("Process", variant="primary")
+
+            gr.Markdown("#### ④ Export")
+            preset_defaults = _preset_choices()
+            presets = gr.CheckboxGroup(
+                preset_defaults,
+                value=[p for p in preset_defaults if p.startswith("portrait_2x3")
+                       or p.startswith("web_card_3x4")],
+                label="Export sizes",
+            )
+            run_btn = gr.Button("Process this dress", variant="primary", size="lg")
 
         with gr.Column(scale=1):
             gr.Markdown(
@@ -870,7 +891,7 @@ def build_compare_tab() -> None:
                     f"{len(backdrop_library.list_entries())} saved backdrop photo(s) "
                     f"already in your library -- included below automatically."
                 )
-            compare_btn = gr.Button("Compare backdrops", variant="primary")
+            compare_btn = gr.Button("Compare backdrops", variant="primary", size="lg")
             status = gr.Textbox(label="Progress", lines=2, interactive=False)
         with gr.Column(scale=2):
             sheets = gr.Gallery(
