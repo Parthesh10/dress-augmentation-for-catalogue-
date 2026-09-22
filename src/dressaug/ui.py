@@ -18,6 +18,7 @@ import os
 import re
 import shutil
 import tempfile
+import threading
 import time
 import traceback
 from pathlib import Path
@@ -25,7 +26,7 @@ from pathlib import Path
 import gradio as gr
 import numpy as np
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from PIL import Image, ImageOps
 
 from . import backdrop_library, backgrounds, stages  # noqa: F401 -- importing stages registers them
@@ -1035,26 +1036,32 @@ _CSS = """
 #: a client-side `setInterval`, and browsers throttle `setInterval` in a
 #: *backgrounded* tab (Chrome can slow one to roughly once a minute after
 #: ~5 minutes backgrounded) -- a tab the operator had simply switched away
-#: from, not closed, could still trip a short missed-tick timeout. Polling
-#: absence can't tell "closed" from "merely not the active tab."
+#: from, not closed, could still trip a short missed-tick timeout.
 #:
-#: Fixed by tracking the actual event instead of inferring it: `pagehide`
-#: fires only on a genuine navigate-away/tab-close/browser-close, never on
-#: backgrounding, minimising, or switching tabs -- confirmed against MDN's
-#: own description of the event, the standard signal recommended over the
-#: older `unload`/`beforeunload` for this exact purpose. The handler uses
-#: `navigator.sendBeacon`, the one API browsers guarantee gets a best-effort
-#: send even as the page is torn down (a plain `fetch` is not reliably
-#: allowed to complete after `pagehide` fires). No polling, no timeout to
-#: tune, no false positive from a tab sitting in the background.
+#: Second version tracked the real `pagehide` event (fires only on a
+#: genuine navigate-away/tab-close/browser-close, confirmed against MDN --
+#: never from backgrounding or switching tabs) but treated any single
+#: `pagehide` as "the app is closing," which broke two real cases reported
+#: directly: refreshing the page also fires `pagehide` on the old page
+#: (unload-before-reload is how a refresh works at all), and opening the
+#: app in two tabs meant closing *either one* stopped it for both, because
+#: nothing was counting how many tabs were actually open.
 #:
-#: Known, accepted limitation: this is a *count of one*, not a reference
-#: count -- if the app is ever opened in two tabs at once, closing either
-#: one stops the server for both. Fine for how this tool is actually used
-#: (one operator, one tab); revisit with a real tab-count if that changes.
+#: Fixed with real reference counting instead of a single boolean signal.
+#: Each page load generates a random per-tab id and registers it
+#: (`_REGISTER_ROUTE`, a plain `fetch` -- the page is loading normally, no
+#: unload constraints); `pagehide` unregisters that same id
+#: (`_UNREGISTER_ROUTE`, via `navigator.sendBeacon`, the one API browsers
+#: guarantee a best-effort send from during page teardown). Only when
+#: unregistering leaves the open-tab set empty does anything happen, and
+#: even then not immediately: a `_REFRESH_GRACE_SECONDS` window gives a
+#: reload's new page time to register before the old page's unregister is
+#: trusted as a real close. A second tab still open means the set is never
+#: empty in the first place, so closing one tab of several no longer
+#: touches the others at all.
 #:
-#: Needs a real server route (`navigator.sendBeacon` POSTs to a URL, there
-#: is no Gradio component for "run this when the page unloads"), which
+#: Needs a real server route (`fetch`/`sendBeacon` POST to a URL, there is
+#: no Gradio component for "run this when the page loads/unloads"), which
 #: means launching via `gr.mount_gradio_app` + `uvicorn.run` instead of the
 #: simpler `.launch()` -- see `main()`. Off by default
 #: (`DRESSAUG_AUTO_SHUTDOWN` unset): DressStudioSetup.bat's detached launch
@@ -1062,12 +1069,20 @@ _CSS = """
 #: including this project's own testing loop) does not, and keeps calling
 #: the simpler `.launch()` unchanged.
 _AUTO_SHUTDOWN = bool(os.environ.get("DRESSAUG_AUTO_SHUTDOWN"))
-_SHUTDOWN_ROUTE = "/dressaug-shutdown"
+_REGISTER_ROUTE = "/dressaug-register"
+_UNREGISTER_ROUTE = "/dressaug-unregister"
+_REFRESH_GRACE_SECONDS = 3
+_open_tabs: set[str] = set()
+_open_tabs_lock = threading.Lock()
 _SHUTDOWN_HEAD = f"""
 <script>
-window.addEventListener('pagehide', function() {{
-    navigator.sendBeacon('{_SHUTDOWN_ROUTE}');
-}});
+(function() {{
+    var tabId = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    fetch('{_REGISTER_ROUTE}', {{method: 'POST', body: tabId, keepalive: true}});
+    window.addEventListener('pagehide', function() {{
+        navigator.sendBeacon('{_UNREGISTER_ROUTE}', tabId);
+    }});
+}})();
 </script>
 """
 
@@ -1092,25 +1107,51 @@ def build() -> gr.Blocks:
     return demo
 
 
+def _exit_if_still_empty_after_grace() -> None:
+    """Runs in a background thread, started once per unregister that leaves
+    `_open_tabs` empty. Waits out the reload window, then trusts the empty
+    set only if it's *still* empty -- a reload's new tab registering in the
+    meantime cancels this by definition, no explicit cancellation needed."""
+    time.sleep(_REFRESH_GRACE_SECONDS)
+    with _open_tabs_lock:
+        still_empty = not _open_tabs
+    if still_empty:
+        # `os._exit` skips the normal interpreter teardown, which includes
+        # flushing stdout -- an ordinary `print` right before it is not
+        # guaranteed to actually reach the terminal/log. Flushed explicitly
+        # so a real exit is always provable, not ambiguous with the process
+        # simply having been killed some other way (this distinction cost
+        # real debugging time once already).
+        print("Dress Studio: last browser tab closed -- exiting now.", flush=True)
+        os._exit(0)
+
+
 def main() -> None:
     if _AUTO_SHUTDOWN:
         # `.launch()` has no hook for "run this route too" -- mounting onto
         # a FastAPI app of our own, the officially documented way to add a
-        # custom route alongside Gradio's, is what the shutdown beacon needs
-        # to land somewhere. `head=_SHUTDOWN_HEAD` is the same argument
-        # `.launch()` itself takes; only how the app gets served changes.
+        # custom route alongside Gradio's, is what the register/unregister
+        # calls need to land somewhere. `head=_SHUTDOWN_HEAD` is the same
+        # argument `.launch()` itself takes; only how the app gets served
+        # changes.
         app = FastAPI()
 
-        @app.post(_SHUTDOWN_ROUTE)
-        async def _shutdown() -> dict:
-            # `os._exit` skips the normal interpreter teardown, which
-            # includes flushing stdout -- an ordinary `print` right before
-            # it is not guaranteed to actually reach the terminal/log.
-            # Flushed explicitly so a real hit is always provable, not
-            # ambiguous with the process simply having been killed some
-            # other way (this distinction cost real debugging time once).
-            print("Dress Studio: shutdown beacon received -- exiting now.", flush=True)
-            os._exit(0)
+        @app.post(_REGISTER_ROUTE)
+        async def _register(request: Request) -> dict:
+            tab_id = (await request.body()).decode()
+            with _open_tabs_lock:
+                _open_tabs.add(tab_id)
+            return {}
+
+        @app.post(_UNREGISTER_ROUTE)
+        async def _unregister(request: Request) -> dict:
+            tab_id = (await request.body()).decode()
+            with _open_tabs_lock:
+                _open_tabs.discard(tab_id)
+                now_empty = not _open_tabs
+            if now_empty:
+                threading.Thread(target=_exit_if_still_empty_after_grace, daemon=True).start()
+            return {}
 
         app = gr.mount_gradio_app(app, build(), path="/", theme=_THEME, css=_CSS, head=_SHUTDOWN_HEAD)
         uvicorn.run(app, host="127.0.0.1", port=7860)
