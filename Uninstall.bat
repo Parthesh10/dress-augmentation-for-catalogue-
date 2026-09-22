@@ -63,6 +63,7 @@ if exist "%APP_DIR%\.venv" (
 
 echo Removing desktop shortcuts ...
 del "%USERPROFILE%\Desktop\Dress Studio.lnk" >nul 2>&1
+del "%USERPROFILE%\Desktop\Stop Dress Studio.lnk" >nul 2>&1
 del "%USERPROFILE%\Desktop\Uninstall Dress Studio.lnk" >nul 2>&1
 
 echo Removing the Windows Settings ^> Apps entry ...

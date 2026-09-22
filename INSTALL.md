@@ -22,13 +22,23 @@ need to do:
    downloading, not something you need to interact with.
 4. When it's done, your browser opens the app automatically.
 
-**A "Dress Studio" shortcut is created on your desktop the first time it
-finishes** — use that from then on instead of hunting for the `.bat` file
-again. (Double-clicking the `.bat` again also still works — it skips
-everything already installed and goes straight to opening the app, a few
-seconds.)
+**Three shortcuts are created on your desktop the first time it
+finishes** — use these from then on instead of hunting for the `.bat` file:
 
-**Keep the black window open while you work** — closing it stops the app.
+- **Dress Studio** — launches the app.
+- **Stop Dress Studio** — quits it.
+- **Uninstall Dress Studio** — removes it (see "Uninstalling" below).
+
+(Double-clicking `DressStudioSetup.bat` itself always still works too — it
+skips everything already installed and goes straight to opening the app, a
+few seconds, and also checks for updates first.)
+
+**Dress Studio keeps running after you close the black window** — it
+starts in the background on purpose, so closing that window (or your
+browser tab) doesn't stop it. Use the **"Stop Dress Studio"** shortcut when
+you actually want to quit it. This changed 2026-09-23 — it used to require
+leaving the window open, which was confusing ("I closed the terminal and
+now it says the page can't be reached").
 
 If it stops with a red `ERROR:` message, read it — it's written to say
 plainly what's wrong (usually: Python or Git not installed yet — see
@@ -141,12 +151,15 @@ Two ways, both do the same thing:
 - Or: Windows Settings → Apps → search "Dress Studio" → Uninstall.
 
 Either one removes the installed app environment and AI models (frees
-several GB) and both desktop shortcuts. **Your saved backdrop photos and
-processed images are kept by default** — the uninstaller asks separately,
-with an explicit typed confirmation, before it will delete those too. Say
-no (or just press Enter) to keep everything except the installed
-software; you can always reinstall later with `DressStudioSetup.bat` and
-your saved photos will still be there.
+several GB) and all three desktop shortcuts. **Your saved backdrop photos
+and processed images are kept by default** — the uninstaller asks
+separately, with an explicit typed confirmation, before it will delete
+those too. Say no (or just press Enter) to keep everything except the
+installed software; you can always reinstall later with
+`DressStudioSetup.bat` and your saved photos will still be there.
+
+It also stops Dress Studio first if it's currently running, since Windows
+won't let a file be deleted while the app still has it open.
 
 ---
 
@@ -165,10 +178,9 @@ finish (check for a red error in its output). Re-run it, or re-run
 refresh; the server takes a moment to finish starting the first time.
 
 **The app seems to ignore a fix / still shows old behaviour** — `run.ps1`
-(which the `.bat` also calls) already stops any leftover server from a
-previous session before starting a new one, but if the app was ever started
-a different way, a stale copy can be left running. Close all open windows
-running it and start it fresh.
+already stops any leftover server from a previous session before starting
+a new one, so this is rare, but if it happens: click **"Stop Dress
+Studio"** on your desktop, then **"Dress Studio"** to start it fresh.
 
 **Something else** — copy the exact error text and send it to whoever gave
 you this guide; nearly every failure mode in this app prints a specific,

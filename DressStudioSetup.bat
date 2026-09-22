@@ -134,6 +134,11 @@ if not exist "%USERPROFILE%\Desktop\Dress Studio.lnk" (
         echo $u.WorkingDirectory = "%APP_DIR%"
         echo $u.IconLocation = "imageres.dll,110"
         echo $u.Save^(^)
+        echo $p = $ws.CreateShortcut^("$env:USERPROFILE\Desktop\Stop Dress Studio.lnk"^)
+        echo $p.TargetPath = "%APP_DIR%\StopDressStudio.bat"
+        echo $p.WorkingDirectory = "%APP_DIR%"
+        echo $p.IconLocation = "imageres.dll,109"
+        echo $p.Save^(^)
         echo $regKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\DressStudio'
         echo New-Item -Path $regKey -Force ^| Out-Null
         echo Set-ItemProperty -Path $regKey -Name DisplayName -Value 'Dress Studio'
@@ -144,14 +149,34 @@ if not exist "%USERPROFILE%\Desktop\Dress Studio.lnk" (
     )
     powershell -NoProfile -ExecutionPolicy Bypass -File "%TEMP%\dressstudio_shortcut.ps1"
     del "%TEMP%\dressstudio_shortcut.ps1" >nul 2>&1
-    echo Shortcuts created -- "Dress Studio" to launch, "Uninstall Dress Studio" to
-    echo remove it. It also now appears under Windows Settings ^> Apps if you'd
-    echo rather uninstall from there.
+    echo Shortcuts created -- "Dress Studio" to launch, "Stop Dress Studio" to
+    echo quit it, "Uninstall Dress Studio" to remove it. It also now appears
+    echo under Windows Settings ^> Apps if you'd rather uninstall from there.
 )
 
 echo.
-echo Starting Dress Studio ...
-powershell -NoProfile -ExecutionPolicy Bypass -File run.ps1
+echo Starting Dress Studio in the background ...
+rem Launched detached and hidden, not in this window -- closing this
+rem window (or the desktop shortcut re-launching it) no longer stops the
+rem app, which was reported directly as confusing ("close terminal, app
+rem stops working"). run.ps1 itself is unchanged and still runs
+rem foreground when called directly (a developer debugging it wants to see
+rem its output and have Ctrl+C work); this only changes how the *launcher*
+rem starts it. The server's lifetime is now controlled by StopDressStudio.bat
+rem instead of a window close -- there is no window to close any more.
+rem Verified this detaches for real before relying on it: a disposable test
+rem process outlived its own launching .bat by design, confirmed by a
+rem delayed file write happening after the launcher had already exited.
+> "%TEMP%\dressstudio_launch.ps1" (
+    echo Start-Process powershell -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File "%APP_DIR%\run.ps1"' -WindowStyle Hidden
+)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%TEMP%\dressstudio_launch.ps1"
+del "%TEMP%\dressstudio_launch.ps1" >nul 2>&1
+echo Your browser will open automatically in a few seconds, once the server
+echo actually answers. Dress Studio keeps running after you close this
+echo window -- use the "Stop Dress Studio" desktop shortcut when you're done.
+echo.
+pause
 goto :eof
 
 :fail
