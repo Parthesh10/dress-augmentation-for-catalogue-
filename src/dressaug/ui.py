@@ -18,13 +18,14 @@ import os
 import re
 import shutil
 import tempfile
-import threading
 import time
 import traceback
 from pathlib import Path
 
 import gradio as gr
 import numpy as np
+import uvicorn
+from fastapi import FastAPI
 from PIL import Image, ImageOps
 
 from . import backdrop_library, backgrounds, stages  # noqa: F401 -- importing stages registers them
@@ -1027,46 +1028,52 @@ _CSS = """
 #: Closing the browser tab (or the whole browser, or a laptop lid) should
 #: stop the server -- asked for directly, 2026-09-23, right after the
 #: *previous* request that the server keep running independent of any
-#: terminal window. Reconciled by making the browser tab itself the thing
-#: that's tracked, via `gr.Timer`: its tick is driven by a `setInterval` in
-#: the page's own JS (confirmed by reading the compiled component source,
-#: not assumed), so it only ever fires while a tab actually has the page
-#: open -- closing the tab stops the JS, which stops the ticks, with no
-#: custom endpoint or injected JS of this project's own needed.
+#: terminal window.
 #:
-#: A grace period, not an instant kill on missing one tick: a page refresh
-#: also briefly stops ticks (old page unloads before the new one's JS
-#: starts), and an instant shutdown would kill the server on every
-#: accidental refresh. `_HEARTBEAT_GRACE_SECONDS` is comfortably longer
-#: than a normal reload takes.
+#: First version of this used a `gr.Timer` heartbeat with a missed-tick
+#: timeout -- wrong, caught before it shipped further: a `Timer`'s tick is
+#: a client-side `setInterval`, and browsers throttle `setInterval` in a
+#: *backgrounded* tab (Chrome can slow one to roughly once a minute after
+#: ~5 minutes backgrounded) -- a tab the operator had simply switched away
+#: from, not closed, could still trip a short missed-tick timeout. Polling
+#: absence can't tell "closed" from "merely not the active tab."
 #:
-#: Off by default, on only when `DRESSAUG_AUTO_SHUTDOWN` is set --
-#: DressStudioSetup.bat's detached launch sets it, a plain `run.ps1` or
-#: `python -m dressaug.ui` (development, including this project's own
-#: testing loop, which checks the server directly without a tab open half
-#: the time) does not. Without that split, every dev session would die the
-#: moment nobody happened to have a browser tab open for 15 seconds.
-_HEARTBEAT_GRACE_SECONDS = 15
+#: Fixed by tracking the actual event instead of inferring it: `pagehide`
+#: fires only on a genuine navigate-away/tab-close/browser-close, never on
+#: backgrounding, minimising, or switching tabs -- confirmed against MDN's
+#: own description of the event, the standard signal recommended over the
+#: older `unload`/`beforeunload` for this exact purpose. The handler uses
+#: `navigator.sendBeacon`, the one API browsers guarantee gets a best-effort
+#: send even as the page is torn down (a plain `fetch` is not reliably
+#: allowed to complete after `pagehide` fires). No polling, no timeout to
+#: tune, no false positive from a tab sitting in the background.
+#:
+#: Known, accepted limitation: this is a *count of one*, not a reference
+#: count -- if the app is ever opened in two tabs at once, closing either
+#: one stops the server for both. Fine for how this tool is actually used
+#: (one operator, one tab); revisit with a real tab-count if that changes.
+#:
+#: Needs a real server route (`navigator.sendBeacon` POSTs to a URL, there
+#: is no Gradio component for "run this when the page unloads"), which
+#: means launching via `gr.mount_gradio_app` + `uvicorn.run` instead of the
+#: simpler `.launch()` -- see `main()`. Off by default
+#: (`DRESSAUG_AUTO_SHUTDOWN` unset): DressStudioSetup.bat's detached launch
+#: sets it, a plain `run.ps1` or `python -m dressaug.ui` (development,
+#: including this project's own testing loop) does not, and keeps calling
+#: the simpler `.launch()` unchanged.
 _AUTO_SHUTDOWN = bool(os.environ.get("DRESSAUG_AUTO_SHUTDOWN"))
-_last_heartbeat = time.time()
-
-
-def _record_heartbeat() -> None:
-    global _last_heartbeat
-    _last_heartbeat = time.time()
-
-
-def _shutdown_watchdog() -> None:
-    while True:
-        time.sleep(3)
-        if time.time() - _last_heartbeat > _HEARTBEAT_GRACE_SECONDS:
-            os._exit(0)
+_SHUTDOWN_ROUTE = "/dressaug-shutdown"
+_SHUTDOWN_HEAD = f"""
+<script>
+window.addEventListener('pagehide', function() {{
+    navigator.sendBeacon('{_SHUTDOWN_ROUTE}');
+}});
+</script>
+"""
 
 
 def build() -> gr.Blocks:
     with gr.Blocks(title="Dress Studio") as demo:
-        heartbeat = gr.Timer(3)
-        heartbeat.tick(_record_heartbeat, inputs=None, outputs=None)
         gr.HTML(
             '<div class="dress-header">'
             "<h1>🪡 Dress Studio</h1>"
@@ -1087,14 +1094,31 @@ def build() -> gr.Blocks:
 
 def main() -> None:
     if _AUTO_SHUTDOWN:
-        # Daemon so it never blocks process exit on its own; `_last_heartbeat`
-        # is set to "now" at import time (above), which is what gives a real
-        # first browser load the full grace period rather than racing it.
-        threading.Thread(target=_shutdown_watchdog, daemon=True).start()
-    # Gradio 6 moved `theme`/`css` from the `Blocks` constructor to
-    # `launch()` -- passed here, not in `build()`, so `build()` stays
-    # exactly what every test calls directly, launch-independent.
-    build().launch(theme=_THEME, css=_CSS)
+        # `.launch()` has no hook for "run this route too" -- mounting onto
+        # a FastAPI app of our own, the officially documented way to add a
+        # custom route alongside Gradio's, is what the shutdown beacon needs
+        # to land somewhere. `head=_SHUTDOWN_HEAD` is the same argument
+        # `.launch()` itself takes; only how the app gets served changes.
+        app = FastAPI()
+
+        @app.post(_SHUTDOWN_ROUTE)
+        async def _shutdown() -> dict:
+            # `os._exit` skips the normal interpreter teardown, which
+            # includes flushing stdout -- an ordinary `print` right before
+            # it is not guaranteed to actually reach the terminal/log.
+            # Flushed explicitly so a real hit is always provable, not
+            # ambiguous with the process simply having been killed some
+            # other way (this distinction cost real debugging time once).
+            print("Dress Studio: shutdown beacon received -- exiting now.", flush=True)
+            os._exit(0)
+
+        app = gr.mount_gradio_app(app, build(), path="/", theme=_THEME, css=_CSS, head=_SHUTDOWN_HEAD)
+        uvicorn.run(app, host="127.0.0.1", port=7860)
+    else:
+        # Gradio 6 moved `theme`/`css` from the `Blocks` constructor to
+        # `launch()` -- passed here, not in `build()`, so `build()` stays
+        # exactly what every test calls directly, launch-independent.
+        build().launch(theme=_THEME, css=_CSS)
 
 
 if __name__ == "__main__":

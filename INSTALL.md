@@ -33,12 +33,17 @@ finishes** — use these from then on instead of hunting for the `.bat` file:
 skips everything already installed and goes straight to opening the app, a
 few seconds, and also checks for updates first.)
 
-**Dress Studio keeps running after you close the black window** — it
-starts in the background on purpose, so closing that window (or your
-browser tab) doesn't stop it. Use the **"Stop Dress Studio"** shortcut when
-you actually want to quit it. This changed 2026-09-23 — it used to require
-leaving the window open, which was confusing ("I closed the terminal and
-now it says the page can't be reached").
+**Dress Studio keeps running after you close the black setup window**, but
+**stops automatically as soon as you close the browser tab it's showing
+in** — the black window and the browser tab are two different things now,
+and only the tab controls it. Switching to another tab, or minimising the
+browser, does **not** stop it — only actually closing that tab does. Use
+the **"Stop Dress Studio"** shortcut any time you want to quit it without
+closing the tab. This changed 2026-09-23 — it used to require leaving the
+black window open ("I closed the terminal and now it says the page can't
+be reached"), and briefly, in between, tracked the tab in a way that could
+false-trigger if it sat in the background for several minutes; both are
+fixed now.
 
 If it stops with a red `ERROR:` message, read it — it's written to say
 plainly what's wrong (usually: Python or Git not installed yet — see

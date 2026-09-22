@@ -183,8 +183,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%TEMP%\dressstudio_launch.p
 del "%TEMP%\dressstudio_launch.ps1" >nul 2>&1
 echo Your browser will open automatically in a few seconds, once the server
 echo actually answers. Dress Studio keeps running after you close this
-echo window, but stops on its own about 15 seconds after every browser tab
-echo showing it is closed -- or use the "Stop Dress Studio" shortcut sooner.
+echo window, and stops on its own as soon as you close the browser tab it's
+echo showing in -- or use the "Stop Dress Studio" shortcut any time before
+echo that.
 echo.
 pause
 goto :eof
