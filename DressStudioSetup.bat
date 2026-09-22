@@ -90,10 +90,13 @@ rem Checking the interpreter file exists isn't enough -- a torch install can
 rem fail partway through (a retired CUDA wheel channel did exactly this on a
 rem real run) and still leave python.exe sitting there, which would make
 rem every future run wrongly call it "already installed" and never retry.
-rem So the real check is whether torch actually imports.
+rem So the real check is whether torch AND BiRefNet's own remote-code
+rem dependencies (einops, kornia, timm) actually import -- checking torch
+rem alone once looked sufficient right up until a real Process click failed
+rem deep in the matting worker because those three were still missing.
 set "TORCH_OK=0"
 if exist ".venv-torch\Scripts\python.exe" (
-    ".venv-torch\Scripts\python.exe" -c "import torch" >nul 2>&1
+    ".venv-torch\Scripts\python.exe" -c "import torch, einops, kornia, timm" >nul 2>&1
     if not errorlevel 1 set "TORCH_OK=1"
 )
 

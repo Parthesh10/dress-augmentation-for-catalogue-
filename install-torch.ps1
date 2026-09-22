@@ -87,6 +87,19 @@ if (-not $torchInstalled) {
 Write-Host "Installing transformers, numpy, pillow ..."
 & $py -m pip install transformers numpy pillow
 
+#: BiRefNet's model code is loaded via transformers' `trust_remote_code`
+#: path (see backends.py), which pulls in whatever the model's own remote
+#: module imports -- not just torch/transformers. Found missing on a real
+#: fresh install: the matting step failed with "This modeling file requires
+#: ... einops, kornia, timm" the first time it actually ran end-to-end,
+#: because the four packages above are sufficient to *import* transformers
+#: cleanly but not to load *this specific* remote model. Invisible on the
+#: original dev machine, whose torch venv was shared with a sibling project
+#: that already happened to have these for its own reasons -- a genuinely
+#: fresh venv never had that accident to hide behind.
+Write-Host "Installing BiRefNet's own remote-code dependencies (einops, kornia, timm) ..."
+& $py -m pip install einops kornia timm
+
 #: The real check, not just "did pip print success" -- confirms torch is
 #: actually importable in this venv before calling the install done, so a
 #: partial failure here can never look identical to a real success on the
@@ -96,6 +109,19 @@ Write-Host "Verifying torch actually imports ..."
 & $py -c "import torch; print('torch', torch.__version__, '-- CUDA available:', torch.cuda.is_available())"
 if ($LASTEXITCODE -ne 0) {
     Write-Error "torch installed but does not import cleanly -- see the error above. Delete .venv-torch and re-run this script."
+    exit 1
+}
+
+#: Same lesson, applied to the exact package set that actually failed on a
+#: real machine: "torch imports" is not "the matting worker can run" --
+#: check the three BiRefNet-specific packages by name too, cheaply (an
+#: import, not a model download), rather than finding out the same way
+#: this bug was found the first time: a real Process click failing deep in
+#: a worker subprocess with no chance to catch it here first.
+Write-Host "Verifying BiRefNet's remote-code dependencies import ..."
+& $py -c "import einops, kornia, timm"
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "einops/kornia/timm installed but do not import cleanly -- see the error above. Delete .venv-torch and re-run this script."
     exit 1
 }
 
