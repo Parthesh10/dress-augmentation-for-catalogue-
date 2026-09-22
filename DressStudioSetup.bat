@@ -32,7 +32,7 @@ if errorlevel 1 (
 where git >nul 2>&1
 if errorlevel 1 (
     echo ERROR: Git was not found.
-    echo Install it from https://git-scm.com/downloads (default options are fine),
+    echo Install it from https://git-scm.com/downloads -- default options are fine,
     echo then run this again.
     goto :fail
 )
