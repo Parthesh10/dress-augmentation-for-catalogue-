@@ -9,12 +9,24 @@ rem calling the same install.ps1 / install-torch.ps1 / run.ps1 a manual
 rem install would runs identically but doesn't trip that.
 rem
 rem What double-clicking this does: check Python/Git are present -> clone
-rem the app next to itself if it isn't already there -> install.ps1 ->
-rem install-torch.ps1 (GPU auto-detected) -> run.ps1. Safe to run again
-rem later -- every step is skipped if already done.
+rem the app next to itself if it isn't already there (or pull the latest
+rem changes if it's already there) -> install.ps1 -> install-torch.ps1
+rem (GPU auto-detected) -> run.ps1. Safe to run again later -- every step
+rem is skipped (or, for the code itself, re-checked against GitHub) if
+rem already done.
+rem
+rem The desktop shortcut this creates points back at THIS .bat file, not
+rem straight at run.ps1 -- found necessary the first time this shipped a
+rem real fix: a colleague's shortcut launched run.ps1 directly, which never
+rem re-checks GitHub for anything, so a fix pushed today would silently
+rem never reach a machine already set up. Going through this file every
+rem time costs a couple of seconds for the update check and is the only
+rem way "double-click the icon" and "get today's code" stay the same thing.
 
 set "REPO_URL=https://github.com/Parthesh10/dress-augmentation-for-catalogue-.git"
 set "APP_DIR=%~dp0Dress Augmentation"
+set "SELF_PATH=%~f0"
+set "SELF_DIR=%~dp0"
 
 echo ==================================================================
 echo  Dress Studio -- setup
@@ -51,7 +63,13 @@ if not exist "%APP_DIR%\run.ps1" (
         goto :fail
     )
 ) else (
-    echo Dress Studio already downloaded at "%APP_DIR%".
+    echo Checking for updates ...
+    pushd "%APP_DIR%"
+    git pull --ff-only >nul 2>&1
+    if errorlevel 1 (
+        echo Could not check for updates just now -- continuing with what's already here.
+    )
+    popd
 )
 
 cd /d "%APP_DIR%"
@@ -93,19 +111,39 @@ if "%TORCH_OK%"=="0" (
 
 if not exist "%USERPROFILE%\Desktop\Dress Studio.lnk" (
     echo.
-    echo Creating a desktop shortcut ...
+    echo Creating desktop shortcuts and an uninstall entry ...
+    rem Windows shortcuts (.lnk) have no supported way to add a custom
+    rem entry to their own right-click menu without a system-wide registry
+    rem change affecting every .lnk on the machine -- too broad an edit for
+    rem what this needs. The standard equivalent instead: a second, clearly
+    rem labelled desktop shortcut for uninstalling, plus a real entry under
+    rem Windows Settings > Apps (the normal place Windows users already look
+    rem to uninstall something), both pointing at Uninstall.bat.
     > "%TEMP%\dressstudio_shortcut.ps1" (
         echo $ws = New-Object -ComObject WScript.Shell
         echo $s = $ws.CreateShortcut^("$env:USERPROFILE\Desktop\Dress Studio.lnk"^)
-        echo $s.TargetPath = "powershell.exe"
-        echo $s.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "%APP_DIR%\run.ps1"'
-        echo $s.WorkingDirectory = "%APP_DIR%"
+        echo $s.TargetPath = "%SELF_PATH%"
+        echo $s.WorkingDirectory = "%SELF_DIR%"
         echo $s.IconLocation = "imageres.dll,174"
         echo $s.Save^(^)
+        echo $u = $ws.CreateShortcut^("$env:USERPROFILE\Desktop\Uninstall Dress Studio.lnk"^)
+        echo $u.TargetPath = "%APP_DIR%\Uninstall.bat"
+        echo $u.WorkingDirectory = "%APP_DIR%"
+        echo $u.IconLocation = "imageres.dll,110"
+        echo $u.Save^(^)
+        echo $regKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\DressStudio'
+        echo New-Item -Path $regKey -Force ^| Out-Null
+        echo Set-ItemProperty -Path $regKey -Name DisplayName -Value 'Dress Studio'
+        echo Set-ItemProperty -Path $regKey -Name UninstallString -Value '"%APP_DIR%\Uninstall.bat"'
+        echo Set-ItemProperty -Path $regKey -Name Publisher -Value 'Dress Studio'
+        echo Set-ItemProperty -Path $regKey -Name NoModify -Value 1
+        echo Set-ItemProperty -Path $regKey -Name NoRepair -Value 1
     )
     powershell -NoProfile -ExecutionPolicy Bypass -File "%TEMP%\dressstudio_shortcut.ps1"
     del "%TEMP%\dressstudio_shortcut.ps1" >nul 2>&1
-    echo Shortcut created -- next time, just double-click "Dress Studio" on your desktop.
+    echo Shortcuts created -- "Dress Studio" to launch, "Uninstall Dress Studio" to
+    echo remove it. It also now appears under Windows Settings ^> Apps if you'd
+    echo rather uninstall from there.
 )
 
 echo.

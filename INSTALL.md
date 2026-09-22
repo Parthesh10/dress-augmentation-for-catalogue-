@@ -132,6 +132,24 @@ else.
 
 ---
 
+## Uninstalling
+
+Two ways, both do the same thing:
+
+- Double-click the **"Uninstall Dress Studio"** shortcut on your desktop
+  (created next to "Dress Studio" the first time setup finished).
+- Or: Windows Settings → Apps → search "Dress Studio" → Uninstall.
+
+Either one removes the installed app environment and AI models (frees
+several GB) and both desktop shortcuts. **Your saved backdrop photos and
+processed images are kept by default** — the uninstaller asks separately,
+with an explicit typed confirmation, before it will delete those too. Say
+no (or just press Enter) to keep everything except the installed
+software; you can always reinstall later with `DressStudioSetup.bat` and
+your saved photos will still be there.
+
+---
+
 ## Troubleshooting
 
 **"Python was not found" / "Git was not found"** — install prerequisites
