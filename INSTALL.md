@@ -7,10 +7,10 @@ read `README.md`/`CLAUDE.md`/`TASK.md` (written for continuing the
 
 ---
 
-## The easy way: `DressStudioSetup.exe`
+## The easy way: `DressStudioSetup.bat`
 
-If you were handed a single file called `DressStudioSetup.exe`, this is all
-you need to do:
+If you were handed a file called `DressStudioSetup.bat`, this is all you
+need to do:
 
 1. Put it anywhere (Desktop is fine) and **double-click it**.
 2. A black window opens and does everything automatically: downloads the
@@ -22,30 +22,36 @@ you need to do:
    downloading, not something you need to interact with.
 4. When it's done, your browser opens the app automatically.
 
-**To use it again later**, just double-click the same `.exe` again — it
+**To use it again later**, just double-click the same `.bat` again — it
 skips everything already installed and goes straight to opening the app
 (a few seconds).
 
 **Keep the black window open while you work** — closing it stops the app.
 
-If it stops with a red error message, read it — it's written to say
+If it stops with a red `ERROR:` message, read it — it's written to say
 plainly what's wrong (usually: Python or Git not installed yet — see
-"Prerequisites" below) rather than failing silently. If it says Windows
-protected your PC / SmartScreen blocked it: click "More info" → "Run
-anyway" — this happens because the .exe isn't digitally signed (a paid
-certificate this small an install doesn't need), not because anything is
-actually wrong with it.
+"Prerequisites" below) rather than failing silently.
 
 Skip the rest of this file unless something goes wrong — the sections
-below are the manual version of exactly what the .exe does for you, useful
-for troubleshooting or if you'd rather run each step yourself.
+below are the manual version of exactly what the `.bat` does for you,
+useful for troubleshooting or if you'd rather run each step yourself.
+
+**Why a `.bat` and not a `.exe`?** An earlier version of this was a
+compiled `.exe`. In practice, security software on a machine that's never
+seen it before sometimes kills a compiled executable mid-run just because
+it's "an unrecognized binary spawning PowerShell and Git" — even when
+there's nothing wrong with it (this happened on a real test — the window
+flashed and closed with no error shown). A `.bat` file is plain text: it
+does the exact same steps by calling the same `install.ps1` /
+`install-torch.ps1` / `run.ps1` scripts, but there's nothing compiled for a
+security scanner to distrust.
 
 ---
 
 ## Prerequisites (needed either way)
 
 **Python 3.11 or newer** and **Git** must be on the machine first — the
-`.exe` checks for these and tells you if either is missing, it doesn't
+`.bat` checks for these and tells you if either is missing, it doesn't
 install them for you.
 
 1. **Python** — [python.org/downloads](https://www.python.org/downloads/).
@@ -60,11 +66,11 @@ To check both worked, open a new PowerShell window (Start menu → type
 print a version number. If either says "not recognized", the PATH checkbox
 above was likely missed — reinstall and check it, or restart the machine
 (PATH changes sometimes need a restart to take effect). Then re-run
-`DressStudioSetup.exe`, or continue manually below.
+`DressStudioSetup.bat`, or continue manually below.
 
 ---
 
-## The manual way (what the .exe does, step by step)
+## The manual way (what the .bat does, step by step)
 
 ### 1. Get the code
 
@@ -127,19 +133,19 @@ else.
 ## Troubleshooting
 
 **"Python was not found" / "Git was not found"** — install prerequisites
-above, tick "Add to PATH" for Python, then run `DressStudioSetup.exe` (or
+above, tick "Add to PATH" for Python, then run `DressStudioSetup.bat` (or
 the relevant script) again.
 
 **The matting/background-removal step fails with an error naming a missing
 interpreter path** — `install-torch.ps1` either wasn't run, or didn't
 finish (check for a red error in its output). Re-run it, or re-run
-`DressStudioSetup.exe`, which will pick up where it left off.
+`DressStudioSetup.bat`, which will pick up where it left off.
 
 **The browser opens to "can't reach this page"** — wait a few seconds and
 refresh; the server takes a moment to finish starting the first time.
 
 **The app seems to ignore a fix / still shows old behaviour** — `run.ps1`
-(which the .exe also calls) already stops any leftover server from a
+(which the `.bat` also calls) already stops any leftover server from a
 previous session before starting a new one, but if the app was ever started
 a different way, a stale copy can be left running. Close all open windows
 running it and start it fresh.
@@ -150,20 +156,12 @@ readable reason rather than a generic crash.
 
 ---
 
-## For whoever is building/sharing the .exe
+## For whoever is sharing this with colleagues
 
-`DressStudioSetup.exe` is generated from `DressStudioSetup.ps1` by
-`build-exe.ps1` (run `powershell -ExecutionPolicy Bypass -File
-build-exe.ps1` from the project root). It's a thin ~30 KB launcher, not a
-frozen copy of the app — it clones the public GitHub repo and runs the
-same `install.ps1` / `install-torch.ps1` / `run.ps1` a manual install
-would, just without anyone having to type the commands. That's deliberate:
-freezing PyTorch itself into one `.exe` (PyInstaller and similar) tends to
-produce a huge, fragile binary that breaks on exactly the detail that
-matters here — which CUDA/CPU build got bundled — where a thin launcher
-that calls out to a real `pip install` at run time doesn't have that
-problem, and stays a few KB instead of gigabytes.
-
-The `.exe` is gitignored, not committed to the repo — hand the built file
-to a colleague directly (email, shared drive, chat) after building it.
-Rebuild it whenever `DressStudioSetup.ps1` changes.
+`DressStudioSetup.bat` is the single file to hand out — it's plain text
+(open it in Notepad any time to see exactly what it does), committed
+directly to the repo, so there's nothing to build or rebuild. Get it to a
+colleague however's easiest: a GitHub Release asset, email, chat, a shared
+drive. It clones the public repo and runs the same `install.ps1` /
+`install-torch.ps1` / `run.ps1` a manual install would, just without
+anyone having to type the commands.

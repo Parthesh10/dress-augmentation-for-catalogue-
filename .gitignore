@@ -1,13 +1,6 @@
 .venv/
 .venv-torch/
 work/
-
-# Built by build-exe.ps1 from DressStudioSetup.ps1 (which IS committed --
-# this is generated output, not source, and an unsigned .exe in git tends to
-# get flagged by antivirus/SmartScreen on download regardless of content.
-# Build it locally and hand the .exe to a colleague directly (a drive/email/
-# chat attachment), not via git.
-DressStudioSetup.exe
 output/
 __pycache__/
 *.pyc
