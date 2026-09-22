@@ -7,18 +7,13 @@ weights, and are deterministic — the same preset gives the same backdrop every
 time, which is what makes a catalogue look like a catalogue instead of like
 thirty different rooms.
 
-**The presets are new**, because the subject is. Jewellery is a small object
-placed on a surface; a gown is a tall subject standing in front of something.
-So this library is weighted toward *walls* rather than tabletops, and its
-palette is occasionwear rather than daytime craft: champagne and blush for
-bridal and party, deep midnight and wine for evening gowns, and a neutral
-studio spread for the plain commercial shot that has to work for everything.
-
-Luminance coverage is deliberate and is the one lesson carried over whole.
-The sibling found `relight` throttling itself on 7 of 7 real photographs
-because backdrops were chosen without reference to how bright the product is;
-`rank_by_luminance` below is that fix, and a new preset earns its place by
-filling a gap in the range rather than by being an unused colour.
+**Trimmed to a single preset, 2026-09-22 (TASK.md §1v)** -- this library
+held up to 40 procedural presets across the occasionwear palette at one
+point; asked for directly, it now keeps just one neutral white/ivory
+option (`studio_ivory`). The real backdrop variety in the app now comes
+from the operator's own photographed backdrops (`backdrop_library.py`),
+not from this module. `PRESETS` having exactly one entry is deliberate,
+not a stub -- see TASK.md §1v for the reasoning and what was removed.
 
 All compositing arithmetic happens in linear light and is encoded to sRGB
 once, at the end.
@@ -73,67 +68,35 @@ class Preset:
     #: down the frame). 1.15 -- off the bottom edge entirely -- for every
     #: other kind, so nothing else has to know this field exists.
     horizon: float = 1.15
+    #: Plaster/wall mottling amplitude, `_wall`'s own low-frequency noise
+    #: layer. Was a hardcoded 0.030 until 2026-09-22; kept as that default
+    #: so the original 11 presets render identically, exposed per-preset so
+    #: a newer one can read as a rougher, more textured surface rather than
+    #: a perfectly smooth gradient -- asked for directly ("not just plain
+    #: colour mats").
+    mottle: float = 0.030
+    #: Soft vertical fold modulation -- a handful of irregular wide waves
+    #: across the width, the way a hung drape or curtain actually looks
+    #: rather than a flat-painted wall. 0 (the default, and every original
+    #: preset) is off entirely. Deliberately small even where used --
+    #: this library's whole aesthetic is muted and not meant to compete
+    #: with the garment, so a "fabric drape" preset reads as gently
+    #: textured cloth, not a stripe pattern.
+    fold: float = 0.0
 
 
+#: **Trimmed to one, 2026-09-22 (TASK.md §1v)** -- asked for directly: keep
+#: a single Plain option, a white/neutral one, and drop the other 39 (the
+#: "40 procedural presets" section above described the library this dict
+#: held before this change; see TASK.md §1v for why and what was removed).
+#: `studio_ivory` was already the app's own default (`ui.py`'s Backdrop
+#: radio) and the nearest thing to a clean white in the set, so it's the one
+#: kept rather than a fresh addition.
 PRESETS: dict[str, Preset] = {
-    # ---- neutral studio: the shot that has to work for every garment -------
     "studio_ivory": Preset(
         "studio_ivory", "cove", "#F4EEE6", "#D6CDC0",
         light=(-0.20, -0.50), falloff=1.30, vignette=0.24, grain=0.005,
         graphs=("flat", "dummy"), horizon=0.15,
-    ),
-    "studio_pearl": Preset(
-        "studio_pearl", "cove", "#E4E2DE", "#B9B6B1",
-        light=(-0.10, -0.45), falloff=1.40, vignette=0.20, grain=0.005,
-        graphs=("flat", "dummy"), horizon=0.15,
-    ),
-    "studio_graphite": Preset(
-        "studio_graphite", "cove", "#514E4B", "#211F1E",
-        light=(-0.25, -0.40), falloff=1.25, vignette=0.30, grain=0.007,
-        graphs=("flat", "dummy"), horizon=0.15,
-    ),
-    # ---- warm luxe: bridal, mehendi, party ---------------------------------
-    "champagne_silk": Preset(
-        "champagne_silk", "cove", "#EBD9BC", "#C0A276",
-        light=(-0.30, -0.40), falloff=1.35, vignette=0.22, grain=0.006,
-        graphs=("flat", "dummy"), horizon=0.15,
-    ),
-    "blush_plaster": Preset(
-        "blush_plaster", "cove", "#F0DCD6", "#CBA9A2",
-        light=(-0.15, -0.48), falloff=1.32, vignette=0.24, grain=0.008,
-        graphs=("flat", "dummy"), horizon=0.15,
-    ),
-    "rose_gold_wash": Preset(
-        "rose_gold_wash", "cove", "#E8C4AE", "#B4826A",
-        light=(-0.28, -0.42), falloff=1.30, vignette=0.26, grain=0.006,
-        graphs=("flat", "dummy"), horizon=0.15,
-    ),
-    # ---- deep and dramatic: evening gowns ----------------------------------
-    "midnight_velvet": Preset(
-        "midnight_velvet", "cove", "#2B3A55", "#0E1522",
-        light=(-0.20, -0.45), falloff=1.28, vignette=0.34, grain=0.007,
-        graphs=("flat", "dummy"), horizon=0.15,
-    ),
-    "wine_drape": Preset(
-        "wine_drape", "cove", "#6E2233", "#2A0C13",
-        light=(-0.25, -0.40), falloff=1.26, vignette=0.32, grain=0.008,
-        graphs=("flat", "dummy"), horizon=0.15,
-    ),
-    "emerald_drape": Preset(
-        "emerald_drape", "cove", "#1F5145", "#0A1F1A",
-        light=(-0.22, -0.44), falloff=1.28, vignette=0.32, grain=0.008,
-        graphs=("flat", "dummy"), horizon=0.15,
-    ),
-    # ---- surfaces, for a garment photographed laid flat --------------------
-    "linen_flatlay": Preset(
-        "linen_flatlay", "surface", "#DCD6C8", "#A79F8E",
-        light=(-0.30, -0.45), falloff=1.38, vignette=0.20, grain=0.012,
-        graphs=("flat",),
-    ),
-    "marble_flatlay": Preset(
-        "marble_flatlay", "surface", "#EFEDE9", "#C6C3BD",
-        light=(-0.18, -0.50), falloff=1.45, vignette=0.18, grain=0.004,
-        graphs=("flat",),
     ),
 }
 
@@ -168,13 +131,26 @@ def _wall(p: Preset, w: int, h: int, seed: int) -> np.ndarray:
     img = _surface(p, w, h, seed)
     img *= (1 - 0.16 * np.clip((y + 1) / 2, 0, 1))[..., None]
 
-    # Plaster mottling: two octaves of smoothed noise, very low amplitude.
+    # Plaster mottling: two octaves of smoothed noise. Amplitude is a
+    # per-preset field since 2026-09-22 (`p.mottle`, default 0.030 --
+    # exactly the old hardcoded value, so the original 11 presets are
+    # bit-identical); a higher value reads as a rougher, more textured
+    # surface instead of a perfectly smooth gradient.
     rng = np.random.default_rng(seed + 7)
     small = rng.normal(0, 1, (max(h // 24, 2), max(w // 24, 2))).astype(np.float32)
     mottle = np.asarray(
         Image.fromarray(small).resize((w, h), Image.BICUBIC), dtype=np.float32
     )
-    img *= 1 + 0.030 * mottle[..., None]
+    img *= 1 + p.mottle * mottle[..., None]
+
+    # Soft vertical folds, `p.fold` (default 0, off) -- a hung-drape
+    # texture instead of a flat wall. Two irregular wide waves, offset by
+    # the preset's own seed so neighbouring drape presets don't repeat the
+    # same fold positions.
+    if p.fold > 0:
+        wave = (0.6 * np.sin(x * 2.3 + seed * 0.7)
+                + 0.4 * np.sin(x * 5.1 - seed * 0.3 + 1.7))
+        img *= (1 + p.fold * wave)[..., None]
     return img
 
 

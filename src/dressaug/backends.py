@@ -48,6 +48,7 @@ fabric the operator declared.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -71,7 +72,33 @@ _SIBLING = ROOT.parent.parent / "Boutique Business"
 #: interpreter answers only changes whether that detection finds a GPU.
 _CUDA_INTERPRETER = _SIBLING / ".venv-cuda" / "Scripts" / "python.exe"
 _CPU_INTERPRETER = _SIBLING / ".venv-birefnet" / "Scripts" / "python.exe"
-INTERPRETER = _CUDA_INTERPRETER if _CUDA_INTERPRETER.exists() else _CPU_INTERPRETER
+
+#: Escape hatch for a machine that doesn't have `../Boutique Business/`
+#: at all -- a fresh install on a second computer, most obviously. The
+#: hardcoded sibling path above is the right default on *this* machine
+#: (it is a real, deliberate multi-GB-install-sharing decision -- see the
+#: module docstring), but it is not portable, and asking an operator
+#: setting this project up elsewhere to edit source to point at wherever
+#: they put their own torch install would be a worse answer than an env
+#: var. Unset, behaviour is unchanged from before this existed.
+_env_interpreter = os.environ.get("DRESSAUG_TORCH_PYTHON")
+
+#: Second portability tier, added for handing this project to a colleague
+#: who has no `../Boutique Business/` sibling and no wish to set an env
+#: var by hand: a self-contained torch install living *inside this
+#: project* at `.venv-torch/`, created by `install-torch.ps1`. Checked
+#: after both sibling paths so a machine that already has the shared
+#: install (this one) keeps using it unchanged -- this tier only matters
+#: on a machine where neither sibling interpreter exists.
+_LOCAL_INTERPRETER = ROOT / ".venv-torch" / "Scripts" / "python.exe"
+
+INTERPRETER = (
+    Path(_env_interpreter) if _env_interpreter
+    else _CUDA_INTERPRETER if _CUDA_INTERPRETER.exists()
+    else _CPU_INTERPRETER if _CPU_INTERPRETER.exists()
+    else _LOCAL_INTERPRETER if _LOCAL_INTERPRETER.exists()
+    else _CPU_INTERPRETER  # unchanged final fallback: a clear "missing interpreter" error, not a silent wrong path
+)
 
 MODEL_ID = "ZhengPeng7/BiRefNet-matting"
 MODEL_REVISION = "57f9f68b43ba337c75762b14cf3075d659007268"

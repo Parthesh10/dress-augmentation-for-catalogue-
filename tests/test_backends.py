@@ -29,9 +29,16 @@ def test_the_cuda_interpreter_is_preferred_when_it_exists():
     """
     if backends._CUDA_INTERPRETER.exists():
         assert backends.INTERPRETER == backends._CUDA_INTERPRETER
+    elif backends._CPU_INTERPRETER.exists():
+        # No CUDA venv, but the sibling CPU one exists -- must still be
+        # preferred over the local-project fallback tier (see
+        # test_local_interpreter_is_used_when_no_sibling_exists below).
+        assert backends.INTERPRETER == backends._CPU_INTERPRETER
+    elif backends._LOCAL_INTERPRETER.exists():
+        assert backends.INTERPRETER == backends._LOCAL_INTERPRETER
     else:
-        # No CUDA venv on this machine -- the fallback path is the one under
-        # test instead, and it must not silently point nowhere.
+        # Nothing exists on this machine at all -- the fallback path is the
+        # one under test instead, and it must not silently point nowhere.
         assert backends.INTERPRETER == backends._CPU_INTERPRETER
 
 
@@ -80,6 +87,62 @@ def test_the_model_is_still_pinned_to_a_revision():
     in this project without anyone changing a line of code here."""
     assert backends.MODEL_REVISION in backends.worker_source()
     assert len(backends.MODEL_REVISION) == 40, "expected a full git SHA, not a short one"
+
+
+def test_env_var_overrides_the_interpreter_path():
+    """The portability escape hatch, added 2026-09-22: on a machine that
+    doesn't have `../Boutique Business/` at all -- a fresh install
+    elsewhere, most obviously -- `DRESSAUG_TORCH_PYTHON` must be able to
+    point `INTERPRETER` anywhere, without editing source. Reloads the
+    module under a patched environment rather than re-deriving the
+    resolution logic by hand, so this proves what actually happens on
+    import, not what the test author assumes it does; restores the
+    environment and reloads back to the real default afterward so no other
+    test in this file (or a later run in the same process) sees the override.
+    """
+    import importlib
+    import os as _os
+    orig = _os.environ.get("DRESSAUG_TORCH_PYTHON")
+    fake = str(pathlib.Path(__file__).resolve())  # any real file will do
+    try:
+        _os.environ["DRESSAUG_TORCH_PYTHON"] = fake
+        importlib.reload(backends)
+        assert backends.INTERPRETER == pathlib.Path(fake)
+    finally:
+        if orig is None:
+            _os.environ.pop("DRESSAUG_TORCH_PYTHON", None)
+        else:
+            _os.environ["DRESSAUG_TORCH_PYTHON"] = orig
+        importlib.reload(backends)
+
+
+def test_local_venv_torch_is_used_when_no_sibling_or_env_var_exists():
+    """The handoff tier, added when this project first went to a colleague's
+    machine: no `../Boutique Business/` sibling, no `DRESSAUG_TORCH_PYTHON`
+    set, but `install-torch.ps1` was run and left a self-contained interpreter
+    at `.venv-torch/`. `INTERPRETER` must find it rather than falling through
+    to the "missing interpreter" default and forcing every matting call to
+    fail on a machine that in fact has everything it needs.
+
+    Faked with a real file standing in for the interpreter, same technique as
+    `test_env_var_overrides_the_interpreter_path` -- proves the resolution
+    order actually implemented, not the order this test's author assumes.
+    """
+    import importlib
+    import os as _os
+    orig = _os.environ.get("DRESSAUG_TORCH_PYTHON")
+    try:
+        _os.environ.pop("DRESSAUG_TORCH_PYTHON", None)
+        importlib.reload(backends)
+        if backends._CUDA_INTERPRETER.exists() or backends._CPU_INTERPRETER.exists():
+            return  # this machine has a sibling interpreter -- that tier wins by design, nothing to prove here
+        assert backends.INTERPRETER in (backends._LOCAL_INTERPRETER, backends._CPU_INTERPRETER)
+    finally:
+        if orig is None:
+            _os.environ.pop("DRESSAUG_TORCH_PYTHON", None)
+        else:
+            _os.environ["DRESSAUG_TORCH_PYTHON"] = orig
+        importlib.reload(backends)
 
 
 def test_matting_device_is_recorded_only_when_the_worker_reports_one():

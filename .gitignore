@@ -1,5 +1,13 @@
 .venv/
+.venv-torch/
 work/
+
+# Built by build-exe.ps1 from DressStudioSetup.ps1 (which IS committed --
+# this is generated output, not source, and an unsigned .exe in git tends to
+# get flagged by antivirus/SmartScreen on download regardless of content.
+# Build it locally and hand the .exe to a colleague directly (a drive/email/
+# chat attachment), not via git.
+DressStudioSetup.exe
 output/
 __pycache__/
 *.pyc
@@ -30,3 +38,9 @@ claid-test-batch/
 # Batch logs and comparison sheets. Regenerable; what matters is transcribed
 # into TASK.md.
 work-reports/
+
+# The operator's own backdrop photos, saved permanently once uploaded
+# through the app (2026-09-22) so they persist across runs and restarts.
+# Same discipline as test-images/ and data/incoming/ -- private, never
+# committed.
+data/backdrop_library/

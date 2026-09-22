@@ -14,6 +14,8 @@ rather than by reading a doc.
 
 from __future__ import annotations
 
+import re
+import shutil
 import tempfile
 import time
 import traceback
@@ -23,7 +25,7 @@ import gradio as gr
 import numpy as np
 from PIL import Image, ImageOps
 
-from . import backgrounds, stages  # noqa: F401 -- importing stages registers them
+from . import backdrop_library, backgrounds, stages  # noqa: F401 -- importing stages registers them
 from .cli import use_utf8_console
 from .config import EXPORT_PRESETS, Fabric, Garment, Graph, JobConfig
 from .graphs import stages_for
@@ -82,6 +84,41 @@ _BACKDROP_THUMBS = _backdrop_gallery()
 _BACKDROP_NAMES = [n for _, n in _BACKDROP_THUMBS]
 
 
+def _combined_backdrop_entries() -> list[tuple[Image.Image, str, str]]:
+    """(thumbnail, display label, internal value) for every backdrop on
+    offer right now, grouped into the three categories asked for directly
+    (2026-09-22) -- **Plain** (the built-in procedural presets, dark ->
+    light, as before, `value == name`), **Studio** and **Nature** (real
+    photographs saved to the operator's own library, oldest-added first
+    within each, `value == "photo:<hash>"`, see `backdrop_library.PREFIX`).
+    The label is prefixed with its category so the grouping is visible in
+    a flat Radio/Gallery list, which has no native section-header widget.
+
+    Recomputed on call rather than cached at import time, unlike
+    `_BACKDROP_THUMBS` above -- the library can grow while the app is
+    running, and the whole point of it is that a newly saved photo shows up
+    without a restart.
+    """
+    out = [(thumb, f"🎨 Plain — {name}", name) for thumb, name in _BACKDROP_THUMBS]
+    icons = {"Studio": "🏛️", "Nature": "🌿"}
+    for category in backdrop_library.CATEGORIES:
+        for entry in backdrop_library.list_entries(category=category):
+            icon = icons.get(category, "🖼️")
+            out.append((
+                backdrop_library.thumbnail(entry, (220, 300)),
+                f"{icon} {category} — {entry.label}",
+                backdrop_library.PREFIX + entry.key,
+            ))
+    return out
+
+
+def _library_choices() -> list[tuple[str, str]]:
+    """(label, key) for the "remove a saved photo" dropdown -- key, not the
+    `photo:`-prefixed value, since `backdrop_library.remove` takes the bare
+    hash."""
+    return [(e.label, e.key) for e in backdrop_library.list_entries()]
+
+
 def _export_stem(upload_path: str | None) -> str:
     """A filesystem-safe name derived from what was actually uploaded.
 
@@ -115,6 +152,8 @@ def process(
     tint_pct,
     exposure_pct,
     preset_labels: list[str],
+    depth_blur_pct=100,
+    finishing_pct=100,
     progress=gr.Progress(),
 ):
     """One garment through phases 1 and 2. A generator so the operator sees
@@ -164,18 +203,32 @@ def process(
         if not auto_place:
             # Leaving these unset is what asks `stages.background` to run
             # the ground detector (floor line and size) and `compose` to
-            # use its defaults (position, seam softening). Setting them is
-            # the override -- all four together, so "manual" has one clear
-            # meaning: the sliders, exactly as they read.
+            # use its defaults (position). Setting them is the override --
+            # together, so "manual placement" has one clear meaning: where
+            # the figure stands and how big it is, exactly as the sliders
+            # read.
             ctx.extra["custom_floor_frac"] = float(floor_frac_pct) / 100.0
             ctx.extra["subject_fill"] = float(fill_pct) / 100.0
             ctx.extra["subject_x"] = float(x_pct) / 100.0
-            ctx.extra["seam_blur_strength"] = float(blur_pct) / 100.0
-            # -100..100 on the slider maps to the same +-0.4 range
-            # `infer_key_direction` itself clips to.
-            ctx.extra["light_dir_x"] = float(light_dir_pct) / 100.0 * 0.4
-            ctx.extra["tint_strength"] = float(tint_pct) / 100.0
-            ctx.extra["exposure_strength"] = float(exposure_pct) / 100.0
+        # Lighting -- seam softening, light direction, colour tint, exposure
+        # match, and background blur -- used to live inside the `not
+        # auto_place` guard above, gated by the *placement* checkbox even
+        # though none of them place anything. Since "Place automatically" is
+        # the recommended, default-on setting, that meant every one of these
+        # sliders had **no effect at all** unless the operator also switched
+        # placement to manual -- reported directly, 2026-09-22, as "moving
+        # the exposure slider does nothing": it wasn't a weak effect, it was
+        # never being read. Independent of `auto_place` now, so the ground
+        # detector can still own where the figure stands while these still
+        # apply. See TASK.md §1o.
+        ctx.extra["seam_blur_strength"] = float(blur_pct) / 100.0
+        # -100..100 on the slider maps to the same +-0.4 range
+        # `infer_key_direction` itself clips to.
+        ctx.extra["light_dir_x"] = float(light_dir_pct) / 100.0 * 0.4
+        ctx.extra["tint_strength"] = float(tint_pct) / 100.0
+        ctx.extra["exposure_strength"] = float(exposure_pct) / 100.0
+        ctx.extra["depth_blur_strength"] = float(depth_blur_pct) / 100.0
+        ctx.extra["finishing_strength"] = float(finishing_pct) / 100.0
 
         steps = stages_for(cfg.graph)
         step_progress = {"ingest": 0.05, "matte": 0.15, "background": 0.55,
@@ -203,7 +256,17 @@ def process(
             yield None, f"Failed: {note}", ""
             return
 
-        gallery = [Image.open(p).convert("RGB") for p in m.outputs]
+        # Captioned by preset -- before this, two export sizes of the same
+        # photo showed as two visually-identical thumbnails with no way to
+        # tell which was which, which is exactly the kind of thing that
+        # reads as "no change happened" even when the pipeline worked.
+        # `m.outputs` and `cfg.presets` share the insertion order `export()`
+        # wrote them in (dict order), so zipping the two is safe.
+        gallery = [
+            (Image.open(p).convert("RGB"),
+             f"{name}  ({EXPORT_PRESETS[name].width}×{EXPORT_PRESETS[name].height})")
+            for name, p in zip(cfg.presets, m.outputs)
+        ]
 
         lines = []
         for g in m.gates:
@@ -215,6 +278,101 @@ def process(
 
         progress(1.0, desc="done")
         yield gallery, report, warn_lines
+
+
+def _process_ui(
+    image, upload_path, garment_label, fabric_label, backdrop_name, custom_backdrop_path,
+    auto_place, fill_pct, x_pct, floor_frac_pct, blur_pct, light_dir_pct, tint_pct,
+    exposure_pct, preset_labels, depth_blur_pct=100, finishing_pct=100,
+    progress=gr.Progress(),
+):
+    """What the Process button actually calls. A thin wrapper, not a
+    rewrite of `process()`: if the operator's `Backdrop` choice is a saved
+    library photo (`"photo:<hash>"`, see `backdrop_library.PREFIX`) rather
+    than a preset name, resolve it to that photo's file on disk and hand it
+    to `process()` exactly the way an "own backdrop photo" upload already
+    works -- `process()` itself, and every test pinned against it, never
+    needs to know the library exists.
+    """
+    if backdrop_name and backdrop_name.startswith(backdrop_library.PREFIX):
+        key = backdrop_name[len(backdrop_library.PREFIX):]
+        path = backdrop_library.LIBRARY_DIR / f"{key}.jpg"
+        if path.exists():
+            custom_backdrop_path = str(path)
+        backdrop_name = ""
+    yield from process(
+        image, upload_path, garment_label, fabric_label, backdrop_name, custom_backdrop_path,
+        auto_place, fill_pct, x_pct, floor_frac_pct, blur_pct, light_dir_pct, tint_pct,
+        exposure_pct, preset_labels, depth_blur_pct, finishing_pct, progress=progress,
+    )
+
+
+def _save_uploaded_backdrop_and_refresh(file_path, category=backdrop_library.DEFAULT_CATEGORY):
+    """Fires when a photo lands in "Or use your own backdrop photo": saves
+    it into the persistent library (a no-op if it's already there -- see
+    `backdrop_library.add`), under the chosen Studio/Nature category, then
+    hands back fresh choices for the `Backdrop` radio and gallery so the
+    photo is pickable by name or by eye immediately, this run, with no
+    restart and no second upload later.
+
+    `gr.update()` (a no-op) when the file input is cleared, so clearing the
+    upload never wipes the radio/gallery back to presets-only.
+    """
+    if not file_path:
+        return gr.update(), gr.update()
+    image = load_upload(file_path)
+    label = f"Your photo: {Path(file_path).stem}"
+    key = backdrop_library.add(image, label, category=category)
+    entries = _combined_backdrop_entries()
+    radio_update = gr.update(
+        choices=[(label, value) for _, label, value in entries],
+        value=backdrop_library.PREFIX + key,
+    )
+    gallery_update = gr.update(value=[(thumb, label) for thumb, label, _ in entries])
+    return radio_update, gallery_update
+
+
+def _on_backdrop_gallery_select(evt: gr.SelectData):
+    """The gallery was captioned "Pick by eye ... or by name here" since
+    §1a, but nothing ever actually connected a click in the gallery to the
+    `Backdrop` radio -- clicking a thumbnail only opened Gradio's own
+    built-in single-image preview, with no effect on which backdrop would
+    actually be used. That gap is what made the gallery decorative rather
+    than a real second way to choose, and it's fixed here, not by removing
+    the claim.
+    """
+    entries = _combined_backdrop_entries()
+    if evt.index is None or evt.index >= len(entries):
+        return gr.update()
+    _, _, value = entries[evt.index]
+    return gr.update(value=value)
+
+
+def _preview_library_backdrop(key):
+    """Fires when "Saved photo" changes in the library accordion -- shows
+    what the selected photo actually looks like before the operator decides
+    whether to remove it, rather than picking blind off a filename-derived
+    label."""
+    if not key:
+        return None
+    entries = {e.key: e for e in backdrop_library.list_entries()}
+    entry = entries.get(key)
+    if entry is None:
+        return None
+    return backdrop_library.thumbnail(entry, (400, 400))
+
+
+def _remove_library_backdrop(key):
+    """"Remove a saved photo" in the Process tab's library accordion."""
+    if not key:
+        return gr.update(), gr.update(), gr.update(), gr.update(), "Pick a saved photo to remove first."
+    backdrop_library.remove(key)
+    entries = _combined_backdrop_entries()
+    radio_update = gr.update(choices=[(label, value) for _, label, value in entries])
+    gallery_update = gr.update(value=[(thumb, label) for thumb, label, _ in entries])
+    list_update = gr.update(choices=_library_choices(), value=None)
+    preview_update = gr.update(value=None)
+    return radio_update, gallery_update, list_update, preview_update, "Removed."
 
 
 #: Contact-sheet cell size. Preview quality on purpose -- the sheet is for
@@ -410,10 +568,11 @@ def build_process_tab() -> None:
                          "Set it explicitly for a sheer/net/lace piece.",
                 )
             backdrop = gr.Radio(
-                _BACKDROP_NAMES, value="studio_ivory", label="Backdrop",
+                [(label, value) for _, label, value in _combined_backdrop_entries()],
+                value="studio_ivory", label="Backdrop",
                 info="Pick by eye in the gallery on the right, or by name here.",
             )
-            with gr.Accordion("Or use your own backdrop photo", open=False):
+            with gr.Accordion("Or use your own backdrop photo", open=True):
                 gr.Markdown(
                     "Upload a photograph — your own venue, your own decor "
                     "setup, or stock you've actually licensed for commercial "
@@ -421,20 +580,41 @@ def build_process_tab() -> None:
                     "Instagram, or a search engine** — those belong to "
                     "whoever photographed them, and using them on a storefront "
                     "without a licence is a real legal risk, not a formality. "
-                    "When a photo is uploaded here, it replaces the preset "
-                    "above; the same grounding, shadow, and colour checks run "
-                    "on it either way."
+                    "**Saved automatically** once uploaded — it joins the list "
+                    "above by name and the gallery by eye, and is still there "
+                    "next time you open the app, until you remove it below."
                 )
                 custom_backdrop = gr.File(
                     label="Backdrop photograph (optional)",
                     file_types=["image", ".heic", ".heif"],
                     height=100,
                 )
+                custom_backdrop_category = gr.Radio(
+                    list(backdrop_library.CATEGORIES),
+                    value=backdrop_library.DEFAULT_CATEGORY, label="Category",
+                    info="Which group this is saved under -- Studio (a venue, a "
+                         "wall, an indoor set) or Nature (outdoors, a garden).",
+                )
                 custom_backdrop_preview = gr.Image(
                     label="Backdrop preview", type="pil", height=160, interactive=False,
                 )
                 custom_backdrop.change(
-                    load_upload, [custom_backdrop], [custom_backdrop_preview])
+                    load_upload, [custom_backdrop], [custom_backdrop_preview],
+                )
+            with gr.Accordion("Your saved backdrop photos", open=True):
+                gr.Markdown(
+                    "Every photo you've uploaded above, on this machine, across "
+                    "every session. Remove one you no longer want offered."
+                )
+                library_list = gr.Dropdown(
+                    choices=_library_choices(), value=None,
+                    label="Saved photo", interactive=True,
+                )
+                library_preview = gr.Image(
+                    label="Preview", type="pil", height=160, interactive=False,
+                )
+                remove_btn = gr.Button("Remove")
+                remove_status = gr.Markdown()
             with gr.Accordion("Placement -- automatic, with overrides", open=False):
                 auto_place = gr.Checkbox(
                     value=True,
@@ -444,7 +624,10 @@ def build_process_tab() -> None:
                          "sizes the figure to how wide the shot is (a room gets a "
                          "smaller figure than a close drape), and warns if the photo "
                          "isn't a place a person could stand. With a preset: the "
-                         "ordinary defaults. Untick to set everything below yourself.",
+                         "ordinary defaults. Untick to set size and position "
+                         "yourself with the two sliders just below -- the lighting "
+                         "sliders further down (seam softening onward) always apply, "
+                         "whether this is ticked or not.",
                 )
                 fill_pct = gr.Slider(
                     minimum=30, maximum=100, value=88, step=1,
@@ -489,9 +672,25 @@ def build_process_tab() -> None:
                     minimum=0, maximum=200, value=100, step=5,
                     label="Exposure match to the backdrop (%, 0 = off)",
                     info="Dims the garment a little for a dark backdrop, lifts it a "
-                         "little for a bright one -- lit by the same room, not just "
-                         "coloured by it. Small by design (about -5% on the darkest "
-                         "preset); the colour gate caps it.",
+                         "little for a bright one, and now shades one side more than "
+                         "the other toward the light -- lit by the same room, not "
+                         "just coloured by it. The colour gate caps it either way.",
+                )
+                depth_blur_pct = gr.Slider(
+                    minimum=0, maximum=200, value=100, step=5,
+                    label="Background softness (%, 0 = off)",
+                    info="A gentle portrait-style blur on whatever is genuinely far "
+                         "from the figure -- the figure itself, and the backdrop "
+                         "right around it, stay sharp. Not a whole-frame blur.",
+                )
+                finishing_pct = gr.Slider(
+                    minimum=0, maximum=200, value=100, step=5,
+                    label="Photo finish -- grain, contrast, vignette (%, 0 = off)",
+                    info="One last pass over the whole finished image, not just the "
+                         "figure -- a touch of film grain, contrast and edge "
+                         "darkening, the way a real camera's own processing does. "
+                         "This is what makes the figure and the backdrop read as "
+                         "one photograph instead of two separately-lit pieces.",
                 )
             preset_defaults = _preset_choices()
             presets = gr.CheckboxGroup(
@@ -511,10 +710,14 @@ def build_process_tab() -> None:
             run_btn = gr.Button("Process", variant="primary")
 
         with gr.Column(scale=1):
-            gr.Markdown("#### Backdrops, sorted dark → light")
-            gr.Gallery(
-                value=_BACKDROP_THUMBS, columns=3, height=420,
-                show_label=False, object_fit="cover",
+            gr.Markdown(
+                "#### Backdrops, sorted dark → light\n"
+                "Click a photo to pick it — it selects the same backdrop as "
+                "the list on the left."
+            )
+            backdrop_gallery = gr.Gallery(
+                value=[(thumb, label) for thumb, label, _ in _combined_backdrop_entries()],
+                columns=3, height=420, show_label=False, object_fit="cover",
             )
 
     gr.Markdown("---")
@@ -525,22 +728,107 @@ def build_process_tab() -> None:
             report = gr.Textbox(label="Checks", lines=6, interactive=False)
             warnings = gr.Textbox(label="Warnings", lines=6, interactive=False)
 
+    # Clicking a thumbnail used to just open Gradio's own image preview,
+    # with no effect on which backdrop would actually be used -- the
+    # gallery's own caption promised "pick by eye" without that ever being
+    # wired up. This is the fix, not just a new feature.
+    backdrop_gallery.select(_on_backdrop_gallery_select, None, [backdrop])
+
+    # Saving to the library, then refreshing both the radio and the gallery
+    # so a newly uploaded photo is immediately pickable -- not just present
+    # after a restart -- is chained onto the existing preview update rather
+    # than replacing it.
+    custom_backdrop.change(
+        _save_uploaded_backdrop_and_refresh,
+        [custom_backdrop, custom_backdrop_category], [backdrop, backdrop_gallery],
+    )
+    library_list.change(
+        _preview_library_backdrop, [library_list], [library_preview],
+    )
+    remove_btn.click(
+        _remove_library_backdrop, [library_list],
+        [backdrop, backdrop_gallery, library_list, library_preview, remove_status],
+    )
+
     run_btn.click(
-        process,
+        _process_ui,
         inputs=[image, upload, garment, fabric, backdrop, custom_backdrop, auto_place,
                 fill_pct, x_pct, floor_frac, blur_pct, light_dir_pct, tint_pct,
-                exposure_pct, presets],
+                exposure_pct, presets, depth_blur_pct, finishing_pct],
         outputs=[output, report, warnings],
     )
+
+
+def _save_extra_backdrops_to_library(file_paths, category=backdrop_library.DEFAULT_CATEGORY) -> str:
+    """Fires when photos land in "Also compare against your own backdrop
+    photos": saves each into the persistent library (§ `backdrop_library`),
+    under the chosen category, same as the Process tab's upload. Without
+    this, a photo added here only ever appeared in comparisons for the run
+    it was uploaded in -- gone the moment the operator started a fresh
+    batch, let alone a fresh session.
+    """
+    for p in file_paths or []:
+        try:
+            backdrop_library.add(
+                load_upload(str(p)), f"Your photo: {Path(str(p)).stem}", category=category)
+        except Exception:  # noqa: BLE001 -- a bad upload shouldn't crash the wiring
+            continue
+    n = len(backdrop_library.list_entries())
+    return (f"{n} saved backdrop photo(s) — included in every comparison below "
+            f"automatically, on top of anything you add here.")
+
+
+def _compare_backdrops_ui(upload_paths, garment_label, fabric_label, extra_backdrop_paths,
+                           progress=gr.Progress()):
+    """What the Compare button actually calls. `compare_backdrops()` itself
+    stays exactly as tested: this wrapper only adds every backdrop already
+    saved to the library to whatever was freshly uploaded this run, so a
+    photo saved once keeps showing up in every comparison after, with no
+    re-upload -- the same persistence promise the Process tab's radio/
+    gallery make, applied here too.
+
+    A library photo that's identical to one just re-uploaded this run isn't
+    added twice -- compared by content hash, not by filename, since the two
+    uploads may well be named differently.
+
+    Library photos are copied under a name built from their own label
+    before being handed to `compare_backdrops` -- that function captions
+    each sheet cell from the file's own stem (`Path(p).stem`), and a
+    library photo's real filename on disk is its content hash, not
+    anything readable. Without this, every library backdrop's caption on
+    the sheet was a hash string instead of "Studio -- white wall", found
+    on the first real bulk run that included one.
+    """
+    extra_paths = list(extra_backdrop_paths or [])
+    fresh_hashes = set()
+    for p in extra_paths:
+        try:
+            fresh_hashes.add(backdrop_library.hash_image(load_upload(str(p))))
+        except Exception:  # noqa: BLE001
+            pass
+    library_entries = [e for e in backdrop_library.list_entries() if e.key not in fresh_hashes]
+    with tempfile.TemporaryDirectory() as td:
+        for entry in library_entries:
+            named = Path(td) / f"{_sanitize_filename(f'{entry.category} - {entry.label}')}.jpg"
+            shutil.copy(entry.path, named)
+            extra_paths.append(str(named))
+        yield from compare_backdrops(upload_paths, garment_label, fabric_label, extra_paths,
+                                      progress=progress)
+
+
+def _sanitize_filename(label: str) -> str:
+    cleaned = re.sub(r'[^A-Za-z0-9 _-]', '', label).strip()
+    return cleaned[:60] or "backdrop"
 
 
 def build_compare_tab() -> None:
     gr.Markdown(
         "Upload one photograph or many. Each comes back as a contact sheet -- "
-        "the same garment against every built-in backdrop, placed "
-        "automatically -- so you can pick by eye. **Preview only:** nothing is "
-        "exported from here. Once you've chosen, go to *Process a dress*, pick "
-        "that backdrop by name, and make the real file."
+        "the same garment against every built-in backdrop plus every photo "
+        "you've saved to your backdrop library, placed automatically -- so "
+        "you can pick by eye. **Preview only:** nothing is exported from "
+        "here. Once you've chosen, go to *Process a dress*, pick that "
+        "backdrop by name, and make the real file."
     )
     with gr.Row():
         with gr.Column(scale=1):
@@ -574,6 +862,14 @@ def build_compare_tab() -> None:
                     file_count="multiple",
                     height=120,
                 )
+                extra_backdrops_category = gr.Radio(
+                    list(backdrop_library.CATEGORIES),
+                    value=backdrop_library.DEFAULT_CATEGORY, label="Category",
+                )
+                library_note = gr.Markdown(
+                    f"{len(backdrop_library.list_entries())} saved backdrop photo(s) "
+                    f"already in your library -- included below automatically."
+                )
             compare_btn = gr.Button("Compare backdrops", variant="primary")
             status = gr.Textbox(label="Progress", lines=2, interactive=False)
         with gr.Column(scale=2):
@@ -581,30 +877,31 @@ def build_compare_tab() -> None:
                 label="Contact sheets -- one per photograph",
                 columns=1, height=760, object_fit="contain",
             )
+    extra_backdrops.change(
+        _save_extra_backdrops_to_library,
+        [extra_backdrops, extra_backdrops_category], [library_note],
+    )
     compare_btn.click(
-        compare_backdrops,
+        _compare_backdrops_ui,
         inputs=[uploads, garment, fabric, extra_backdrops],
         outputs=[sheets, status],
     )
 
 
 def build_status_tab() -> None:
+    n_library = len(backdrop_library.list_entries())
     gr.Markdown(
-        """
+        f"""
 ### What this app actually does today
 
 | Tool | Status |
 |---|---|
 | **Background removal** | Working |
-| **Apply a new background** | Working — 11 backdrops |
+| **Apply a new background** | Working — 1 plain white backdrop + {n_library} of your own, saved |
 | **Colour change** | Not built (Phase 3) |
 | **Shaded / multi-tone colour** | Not built (Phase 4) |
 | **Design edit by prompt** | Not built (Phase 5) |
 | **Dress on a mannequin** | Not built (Phase 6) |
-
-**Known issue:** on dark backdrops a faint pale edge can show around the
-garment (background-removal cleanup not finished). Prefer the lighter
-backdrops until this is fixed.
 
 Every photograph is checked automatically after processing:
 - **colour_fidelity** — does the dress in the result still match the colour
@@ -613,25 +910,75 @@ Every photograph is checked automatically after processing:
   overflowing)?
 - **cutout_softness** — informational only, tells you how much of the edge
   is semi-transparent (relevant for net/lace/chiffon).
+
+**Current, known limitations** (not bugs to re-report — see `CLAUDE.md`
+for the reasoning behind each):
+- A custom backdrop photo that's flat and out-of-focus (an abstract print, a
+  macro shot) can be misread as a plain wall by the floor-finder and come
+  back usable when it shouldn't. Give an ambiguous backdrop photo a glance
+  before trusting it.
+- The first photograph after starting the app is slower (~10-25s) than the
+  ones after it — there's no background worker keeping the matting model
+  warm between runs yet.
+- Colour tint and exposure matching from a backdrop are both a single flat
+  adjustment across the whole garment, not brighter-on-one-side-than-the-
+  other. The sliders under *Placement* let you correct either by hand.
         """
     )
 
 
+#: A warm, muted theme -- matches this library's own occasionwear palette
+#: rather than Gradio's default blue, and reads as "a catalogue tool" more
+#: than "a generic ML demo". No custom `.set()` overrides: the named-hue
+#: constructor is the stable part of Gradio's theming API across versions;
+#: hand-tuned colour tokens are the part that tends to break on an upgrade.
+_THEME = gr.themes.Soft(
+    primary_hue="orange", secondary_hue="amber", neutral_hue="stone",
+)
+
+#: Small, deliberately limited CSS pass -- a header banner, a readable
+#: content width on a wide monitor, and rounded corners on panels so
+#: accordions and cards read as distinct surfaces. Not a redesign: every
+#: control, layout and accordion below is unchanged, this only restyles
+#: what is already there.
+_CSS = """
+.gradio-container { max-width: 1400px !important; margin: 0 auto !important; }
+.dress-header {
+    padding: 20px 26px; border-radius: 16px; margin-bottom: 14px;
+    background: linear-gradient(135deg, #FFF7ED 0%, #FDEBD0 100%);
+    border: 1px solid #F0D6A8;
+}
+.dress-header h1 { margin: 0 0 4px 0; font-size: 1.5rem; }
+.dress-header p { margin: 0; opacity: 0.78; font-size: 0.95rem; }
+.gradio-container .block { border-radius: 12px !important; }
+"""
+
+
 def build() -> gr.Blocks:
     with gr.Blocks(title="Dress Studio") as demo:
-        gr.Markdown("## Dress Studio — background removal & backdrop tool")
+        gr.HTML(
+            '<div class="dress-header">'
+            "<h1>🪡 Dress Studio</h1>"
+            "<p>Background removal &amp; backdrop compositing for occasionwear "
+            "catalogue photography — sarees, lehengas, anarkalis, gowns, party "
+            "dresses.</p>"
+            "</div>"
+        )
         with gr.Tabs():
-            with gr.Tab("Process a dress"):
+            with gr.Tab("🧵 Process a dress"):
                 build_process_tab()
-            with gr.Tab("Compare backdrops"):
+            with gr.Tab("🖼️ Compare backdrops"):
                 build_compare_tab()
-            with gr.Tab("What's built"):
+            with gr.Tab("📋 What's built"):
                 build_status_tab()
     return demo
 
 
 def main() -> None:
-    build().launch()
+    # Gradio 6 moved `theme`/`css` from the `Blocks` constructor to
+    # `launch()` -- passed here, not in `build()`, so `build()` stays
+    # exactly what every test calls directly, launch-independent.
+    build().launch(theme=_THEME, css=_CSS)
 
 
 if __name__ == "__main__":

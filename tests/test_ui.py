@@ -178,7 +178,7 @@ def test_process_runs_the_real_pipeline_end_to_end():
         return
     img = Image.open(FIXTURE).convert("RGB")
     gallery, report, warnings = list(ui.process(
-        img, str(FIXTURE), "Gown", ui._AUTO_FABRIC, "champagne_silk", None, False, 88, 50, 95, 100, -25, 100, 100,
+        img, str(FIXTURE), "Gown", ui._AUTO_FABRIC, "studio_ivory", None, False, 88, 50, 95, 100, -25, 100, 100,
         ui._preset_choices()[:2], progress=_NoProgress(),
     ))[-1]
     assert gallery is not None and len(gallery) == 2
@@ -301,6 +301,198 @@ def test_compare_runs_two_real_photographs_into_two_sheets():
     rows = (n + ui._SHEET_COLS - 1) // ui._SHEET_COLS
     for im, _ in sheets:
         assert im.size == (ui._SHEET_COLS * cw, rows * ch + 28)
+
+
+import contextlib
+import tempfile as _tempfile
+
+from dressaug import backdrop_library
+
+
+@contextlib.contextmanager
+def _isolated_library():
+    """Same isolation as `test_backdrop_library.py` -- these tests must
+    never read or write the real `data/backdrop_library/`, which may hold
+    the operator's actual saved photos on this machine."""
+    orig_dir, orig_manifest = backdrop_library.LIBRARY_DIR, backdrop_library._MANIFEST
+    with _tempfile.TemporaryDirectory() as td:
+        backdrop_library.LIBRARY_DIR = pathlib.Path(td) / "backdrop_library"
+        backdrop_library._MANIFEST = backdrop_library.LIBRARY_DIR / "manifest.json"
+        try:
+            yield
+        finally:
+            backdrop_library.LIBRARY_DIR = orig_dir
+            backdrop_library._MANIFEST = orig_manifest
+
+
+def test_combined_backdrop_entries_is_presets_only_when_the_library_is_empty():
+    with _isolated_library():
+        entries = ui._combined_backdrop_entries()
+        assert [v for _, _, v in entries] == ui._BACKDROP_NAMES
+
+
+def test_combined_backdrop_entries_appends_library_photos_after_presets():
+    with _isolated_library():
+        backdrop_library.add(Image.new("RGB", (300, 400), (200, 120, 60)), "my venue")
+        entries = ui._combined_backdrop_entries()
+        assert len(entries) == len(ui._BACKDROP_NAMES) + 1
+        thumb, label, value = entries[-1]
+        assert "my venue" in label
+        assert value.startswith(backdrop_library.PREFIX)
+
+
+def test_backdrop_gallery_select_returns_the_matching_value():
+    """Pins the fix for a real gap: the gallery's caption promised "pick by
+    eye" since it was introduced, but nothing connected a click to the
+    `Backdrop` radio until now -- this is the function that click wires to."""
+    class _Evt:
+        index = 0
+    result = ui._on_backdrop_gallery_select(_Evt())
+    # index 0 is the first (darkest) built-in preset in `_BACKDROP_NAMES`'s
+    # own order, which `_combined_backdrop_entries` preserves.
+    assert result["value"] == ui._BACKDROP_NAMES[0]
+
+
+def test_backdrop_gallery_select_is_a_noop_for_an_out_of_range_index():
+    class _Evt:
+        index = 9999
+    result = ui._on_backdrop_gallery_select(_Evt())
+    assert "value" not in result
+
+
+def test_process_ui_resolves_a_library_backdrop_to_its_saved_file():
+    """`_process_ui` is what the Process button actually calls; this proves
+    a `"photo:<hash>"` radio value reaches `process()` as a real custom
+    backdrop path, not as a literal (invalid) background name."""
+    with _isolated_library():
+        key = backdrop_library.add(
+            Image.new("RGB", (200, 300), (80, 80, 200)), "test venue")
+        img = Image.new("RGB", (80, 80), (180, 140, 140))
+        result = list(ui._process_ui(
+            img, None, "Gown", ui._AUTO_FABRIC, backdrop_library.PREFIX + key, None,
+            False, 88, 50, 95, 100, -25, 100, 100, [],
+            progress=_NoProgress(),
+        ))[-1]
+        # Empty preset list -- this only needs to prove the guard *after*
+        # the backdrop check fires (export size), not a backdrop refusal,
+        # which is exactly what would happen if the library value leaked
+        # into `process()` unresolved.
+        assert result[0] is None
+        assert "export size" in result[1].lower(), result[1]
+
+
+def test_save_uploaded_backdrop_and_refresh_is_a_noop_for_no_file():
+    result = ui._save_uploaded_backdrop_and_refresh(None)
+    assert len(result) == 2
+
+
+def test_save_uploaded_backdrop_and_refresh_adds_to_the_library():
+    with _isolated_library():
+        with _tempfile.TemporaryDirectory() as td:
+            path = pathlib.Path(td) / "my-decor.jpg"
+            Image.new("RGB", (300, 400), (210, 150, 90)).save(path, quality=90)
+            radio_update, gallery_update = ui._save_uploaded_backdrop_and_refresh(str(path))
+        assert radio_update["value"].startswith(backdrop_library.PREFIX)
+        assert len(backdrop_library.list_entries()) == 1
+        assert len(gallery_update["value"]) == len(ui._BACKDROP_NAMES) + 1
+
+
+def test_preview_library_backdrop_returns_the_saved_photo():
+    with _isolated_library():
+        key = backdrop_library.add(Image.new("RGB", (300, 400), (10, 200, 10)), "greenish")
+        preview = ui._preview_library_backdrop(key)
+        assert preview is not None
+        assert preview.size[0] > 0 and preview.size[1] > 0
+
+
+def test_preview_library_backdrop_is_none_for_no_selection_or_unknown_key():
+    with _isolated_library():
+        assert ui._preview_library_backdrop(None) is None
+        assert ui._preview_library_backdrop("not-a-real-key") is None
+
+
+def test_remove_library_backdrop_removes_it_and_refreshes_choices():
+    with _isolated_library():
+        key = backdrop_library.add(Image.new("RGB", (100, 100), (1, 2, 3)), "to remove")
+        radio_update, gallery_update, list_update, preview_update, status = (
+            ui._remove_library_backdrop(key))
+        assert backdrop_library.list_entries() == []
+        assert len(radio_update["choices"]) == len(ui._BACKDROP_NAMES)
+        assert list_update["choices"] == []
+        assert preview_update["value"] is None
+        assert "removed" in status.lower()
+
+
+def test_remove_library_backdrop_with_no_selection_refuses_without_raising():
+    with _isolated_library():
+        result = ui._remove_library_backdrop(None)
+        assert "pick" in result[-1].lower()
+
+
+def test_compare_backdrops_ui_includes_saved_library_photos_automatically():
+    """The wrapper the Compare button actually calls: a backdrop saved to
+    the library in an earlier run must show up in this run's comparison
+    without being re-uploaded -- same persistence promise as the Process
+    tab's radio, applied to the bulk tab."""
+    with _isolated_library():
+        backdrop_library.add(Image.new("RGB", (300, 400), (30, 90, 140)), "saved venue")
+        result = list(ui._compare_backdrops_ui(None, "Gown", ui._AUTO_FABRIC, None,
+                                               progress=_NoProgress()))[-1]
+        # No photograph uploaded -- the guard fires before any backdrop is
+        # even looked at, which is exactly why this only needs to prove the
+        # wrapper doesn't crash while merging in the library before that
+        # guard runs, not that a sheet gets built.
+        assert result[0] == []
+
+
+def test_sanitize_filename_strips_unsafe_characters_and_caps_length():
+    assert ui._sanitize_filename("Studio - White wall") == "Studio - White wall"
+    cleaned = ui._sanitize_filename("a/b:c*d?e")
+    assert "/" not in cleaned and ":" not in cleaned and "*" not in cleaned
+    assert ui._sanitize_filename("") == "backdrop"
+    assert len(ui._sanitize_filename("x" * 200)) == 60
+
+
+def test_compare_backdrops_ui_captions_library_photos_by_label_not_hash():
+    """Pins the fix for a real bug found on the first bulk run that
+    included library photos: `compare_backdrops` captions each sheet cell
+    from its input file's own stem, and a library photo's real filename on
+    disk is its content hash -- so without renaming, every library
+    backdrop's caption came back as an unreadable hash string instead of
+    its label. Checked by intercepting the call to the real
+    `compare_backdrops`, not by running a real (slow) matte."""
+    with _isolated_library():
+        key = backdrop_library.add(
+            Image.new("RGB", (300, 400), (80, 150, 90)), "White wall", category="Studio")
+        captured = {}
+
+        def _fake_compare_backdrops(upload_paths, garment_label, fabric_label,
+                                     extra_paths, progress=None):
+            captured["extra_paths"] = list(extra_paths)
+            return iter(())
+
+        orig = ui.compare_backdrops
+        ui.compare_backdrops = _fake_compare_backdrops
+        try:
+            list(ui._compare_backdrops_ui(None, "Gown", ui._AUTO_FABRIC, None,
+                                          progress=_NoProgress()))
+        finally:
+            ui.compare_backdrops = orig
+
+        stems = [pathlib.Path(p).stem for p in captured["extra_paths"]]
+        assert any("White wall" in s for s in stems), stems
+        assert key not in stems
+
+
+def test_status_tab_no_longer_carries_the_stale_dark_backdrop_warning():
+    """Pins the fix for stale copy: 'Prefer the lighter backdrops until
+    this is fixed' referred to the edge-halo bug that §5/P0 already fixed
+    (2026-09-19), but the status page kept telling operators to avoid dark
+    backdrops for a bug that no longer existed."""
+    import inspect
+    src = inspect.getsource(ui.build_status_tab)
+    assert "Prefer the lighter backdrops" not in src
+    assert "background-removal cleanup not finished" not in src
 
 
 if __name__ == "__main__":

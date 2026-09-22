@@ -13,6 +13,8 @@ the fractional band *is* the product.
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 from PIL import Image, ImageFilter, ImageOps
 
@@ -436,23 +438,51 @@ def contact_shadow(
 
     yy, xx = np.mgrid[0:ch, 0:cw].astype(np.float32)
     rx = max(contact_w * 0.55, 4.0)
-    ry = max(rx * 0.22, 3.0)  # flat -- a shadow on a plane seen face-on
+    ry = max(rx * 0.32, 3.0)  # flat -- a shadow on a plane seen face-on
 
-    # Pushed *most of the way below* the contact line, not just a hair below
-    # it. Found necessary on a real photograph, not assumed: the contact band
-    # can include an uneven hem or a flared skirt whose lowest solid pixels
-    # sit right at the edge of the placed bounding box, and a shadow centred
-    # there has most of its own peak overwritten by the subject's own opaque
-    # pixels when the product is pasted on top -- what survives is only the
-    # faint tail, invisible at normal viewing size. Offsetting by most of the
-    # shadow's own vertical radius keeps the peak clear of the subject while
-    # still overlapping it enough to read as touching, not detached.
+    # **Revised twice, 2026-09-22** -- see TASK.md §1p and §1q. The first
+    # revision (pushing by 0.30 of `ry` instead of the original 0.85) was
+    # still wrong: measured with an actual pixel diff against the
+    # pre-revision render, it moved the peak by about 17px on a 2048px
+    # frame -- a real change, too small to read as one, which is exactly
+    # what the operator caught by eye when the "fixed" render still looked
+    # identical. The peak now sits **exactly on the contact line** (offset
+    # 0), not pushed below it at all: `shadow(contact_y) == 1.0` by
+    # construction, so the darkest point of the shadow is always right
+    # where the fabric ends, whatever `contact_band` measured that point
+    # to be. Roughly half the ellipse's mass sits above the contact line
+    # -- covered by the subject's own opaque paste wherever the fabric is
+    # actually solid there -- and the other half is the visible pool below
+    # it, touching by definition rather than by tuning a push distance to
+    # happen to land close enough.
     off_x = -np.sign(key_dir[0]) * cw * 0.01
-    off_y = ry * 0.85
+    off_y = 0.0
 
     dx = (xx - (contact_cx + off_x)) / rx
     dy = (yy - (contact_y + off_y)) / ry
-    shadow = np.exp(-1.4 * (dx * dx + dy * dy))
+    # Steeper than the original 1.4 -- concentrates the visible darkness
+    # into an actual contact point instead of spreading it thin over the
+    # whole ellipse. Part of the same 2026-09-22 revision (TASK.md §1q):
+    # centring alone (`off_y = 0.0`, above) was still too faint to read as
+    # touching anything once actually looked at, not just measured.
+    ambient = np.exp(-2.2 * (dx * dx + dy * dy))
+
+    # **A second, denser layer, added 2026-09-22 (TASK.md §1t)** -- compared
+    # directly against a real contact shadow from an external tool
+    # (Gemini/"Nano Banana"), the single-ellipse shadow above was still
+    # visibly weaker: a real contact shadow isn't one soft gaussian, it's a
+    # small, dense near-black core (where the object actually meets the
+    # surface) fading into a much broader, fainter ambient falloff -- two
+    # different rates of falloff, not one. `core` is the same shape at a
+    # quarter the radius and a steeper coefficient; `np.maximum` with
+    # `ambient` means the core only ever *adds* a wider near-max-dark
+    # plateau right at the contact point, it never darkens the broad
+    # ambient tail beyond what `ambient` alone already sets there.
+    core_rx, core_ry = rx * 0.42, ry * 0.42
+    dxc = (xx - (contact_cx + off_x)) / core_rx
+    dyc = (yy - (contact_y + off_y)) / core_ry
+    core = np.exp(-2.8 * (dxc * dxc + dyc * dyc))
+    shadow = np.maximum(ambient, core)
 
     # Blurred relative to the shadow's *own* size, not the canvas as a whole
     # -- a blur radius comparable to or larger than `ry` was diluting the
@@ -632,6 +662,194 @@ def soften_backdrop(
     return Image.fromarray(np.clip(np.rint(out), 0, 255).astype(np.uint8), "RGB")
 
 
+def depth_blur_backdrop(
+    bg: Image.Image, ox: int, oy: int, w: int, h: int, strength: float | None = None,
+) -> Image.Image:
+    """Soften whatever in the backdrop is genuinely far from the subject, while
+    leaving the subject's own depth -- its silhouette and whatever immediately
+    flanks it -- sharp. The portrait-lens look asked for directly, 2026-09-22:
+    subject in focus, background gently soft, the way a real shallow depth of
+    field looks, not a uniform wash.
+
+    **Distinct from the whole-frame blur already tried and rejected twice**
+    (`soften_backdrop`'s docstring, and `Thresholds.foot_blur_frac`'s): both
+    of those applied one strength across the *entire* backdrop, including the
+    wall and floor immediately beside the subject -- which is what read as "a
+    sharp cutout on a uniformly soft photo" rather than "a sharp subject with
+    a naturally soft background". This is zero within a margin around the
+    subject's own footprint (an elliptical near-zone, wider than tall -- a
+    standing figure's own depth-of-field "safe zone" in a typical portrait
+    framing is mostly horizontal) and only grows with real distance from it.
+
+    `strength` scales the blur radius (1.0 = ordinary, 0 = off), the same
+    convention as `soften_backdrop`'s own `strength`; `None` means the
+    default. Works identically on a procedural preset or a photographed
+    custom backdrop -- there is no depth model to be wrong about, only
+    distance from the subject in the frame.
+    """
+    T = THRESHOLDS
+    s = T.depth_blur_strength if strength is None else float(strength)
+    if s <= 0 or w <= 0 or h <= 0:
+        return bg
+    blur_px = max(int(round(min(bg.size) * T.depth_blur_frac * s)), 0)
+    if blur_px < 1:
+        return bg
+
+    cw, ch = bg.size
+    cx, cy = ox + w / 2.0, oy + h / 2.0
+    near_x = max(w * T.depth_blur_near_x / 2.0, cw * 0.06)
+    near_y = max(h * T.depth_blur_near_y / 2.0, ch * 0.06)
+    yy, xx = np.mgrid[0:ch, 0:cw].astype(np.float32)
+    d = np.hypot((xx - cx) / near_x, (yy - cy) / near_y)
+    t = np.clip((d - 1.0) / T.depth_blur_falloff, 0.0, 1.0)
+    weight = (t * t * (3 - 2 * t))[..., None]  # smoothstep; 0 at/near the subject
+
+    heavy = bg.filter(ImageFilter.GaussianBlur(blur_px))
+    base_arr = np.asarray(bg, np.float32)
+    heavy_arr = np.asarray(heavy, np.float32)
+    out = base_arr * (1.0 - weight) + heavy_arr * weight
+    # rint, not a bare astype -- see `soften_backdrop`'s own comment; the
+    # same one-level dither on an otherwise-flat region was found here too.
+    return Image.fromarray(np.clip(np.rint(out), 0, 255).astype(np.uint8), "RGB")
+
+
+def exposure_gain_field(
+    shape: tuple[int, int], key_dir: tuple[float, float],
+    scene_luminance: float | None, *, custom: bool = False, scale: float = 1.0,
+) -> np.ndarray:
+    """`exposure_gain`'s directional refinement: an `(h, w)` field of
+    per-pixel brightness multipliers across the subject's own footprint,
+    instead of one flat number applied everywhere.
+
+    A flat multiplier reads as "the exposure slider was nudged", because
+    real light never lands on a standing figure evenly -- the side toward
+    the key light is a little brighter, the side away from it a little
+    darker. This shapes the *same* budget `exposure_gain` already spends
+    into a gradient along `key_dir` instead of spreading it evenly, which
+    is what makes it read as shaped by the scene's light rather than
+    merely dimmed or brightened by it -- covered by the shading-only
+    relighting exception (CLAUDE.md, 2026-09-21): a pure per-pixel scalar
+    on luminance, nothing touching hue, print or embroidery.
+
+    **Centred on the same flat gain, not a bigger swing on top of it** --
+    `Thresholds.shading_spread` sets how much the two sides diverge from
+    it, and that divergence is deliberately allowed to be more visible
+    than the flat clamp alone: `gates()` compares the *mean* Lab colour of
+    the whole product region, and a swing that is brighter on one side and
+    darker on the other in roughly equal measure moves that mean only
+    slightly even when the swing itself is larger than the flat version's
+    own bound -- measured on a real photograph before being trusted (see
+    TASK.md §1o), not assumed from the arithmetic alone.
+    """
+    flat = exposure_gain(scene_luminance, custom=custom, scale=scale)
+    h, w = shape
+    h, w = max(h, 1), max(w, 1)
+    # No known backdrop luminance means no adjustment at all -- `exposure_
+    # gain` returns exactly 1.0 for this case, and the field must match it
+    # exactly rather than inventing a directional shading pattern with
+    # nothing to base it on.
+    if scene_luminance is None:
+        return np.full((h, w), flat, np.float32)
+
+    nx, ny = key_dir
+    norm = math.hypot(nx, ny) or 1.0
+    nx, ny = nx / norm, ny / norm
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    # -1..1 across the subject along the key-light axis, zero-mean by
+    # construction (a linear ramp centred on the footprint) -- which is
+    # exactly what keeps the *mean* colour shift close to the flat
+    # version's while the local swing is bigger.
+    proj = (xx / max(w - 1, 1) - 0.5) * nx + (yy / max(h - 1, 1) - 0.5) * ny
+    proj = proj / (np.abs(proj).max() + 1e-6)
+
+    T = THRESHOLDS
+    spread = (T.shading_strength_custom if custom else T.shading_spread) * scale
+    field = flat + spread * -proj
+    gmin = T.exposure_gain_min_custom if custom else T.exposure_gain_min
+    gmax = T.exposure_gain_max_custom if custom else T.exposure_gain_max
+    # A wider safety margin than the flat clamp, not the same one -- the
+    # mean-preserving argument above bounds the *gate's* exposure, not
+    # what an individual pixel could swing to, and this is the backstop
+    # against that regardless of how large `shading_spread` is tuned.
+    return np.clip(field, gmin * 0.9, gmax * 1.15).astype(np.float32)
+
+
+def apply_finishing(
+    canvas_srgb: np.ndarray, strength: float | None = None, seed: int = 0,
+    *, custom: bool = False,
+) -> np.ndarray:
+    """One last pass over the **entire finished frame** -- subject and
+    backdrop alike -- the thing nothing else in this pipeline touches.
+    Every other realism fix (tint, exposure, the two blurs, the shadow)
+    operates on the subject region or the contact area only; this is what
+    was missing to make the *whole photograph* read as one exposure
+    rather than a subject placed onto a backdrop, however well each part
+    was separately handled. See `Thresholds`' own "whole-frame finishing
+    pass" comment for the reasoning this was built from -- a direct
+    comparison against an external tool's output on 2026-09-22.
+
+    Three small, ordinary things a camera's own JPEG pipeline already
+    does, applied here explicitly:
+
+    1. **Grain, uniform across the whole canvas.** `backgrounds.render`'s
+       own grain lives in the backdrop only, baked in before the subject
+       is pasted -- so the pasted subject always had *less* grain than
+       what surrounds it, a small but real mismatch a real single-exposure
+       photograph never has.
+    2. **A mild contrast lift**, in sRGB space around the 0.5 midpoint --
+       gamma-encoded space, matching where a camera's own tone curve
+       actually applies it, not linear light.
+    3. **A whole-frame vignette** -- unlike the procedural backdrops' own
+       vignette (baked into the backdrop only), this darkens the true
+       corners of the finished canvas, subject included.
+
+    `strength` scales all three together (1.0 = ordinary, 0 = off), same
+    convention as every other override in this module. Deliberately one
+    knob, not three -- these read as a single "how much does this look
+    like one photograph" effect, not three independent choices.
+
+    `custom=True` (2026-09-22, CLAUDE.md "Next actionables" §1) raises
+    grain and vignette to their `_custom` values -- found necessary on a
+    real photographed backdrop (a gravel path) where the ordinary strength
+    measured as present but read as invisible against the backdrop's own
+    texture. Contrast is left at the ordinary value regardless: it is the
+    one knob here with the least measured headroom under `colour_fidelity`
+    (TASK.md §1t), and raising it for custom backdrops needs the same
+    real-photo measurement before it can be trusted, not a guess.
+    """
+    T = THRESHOLDS
+    s = T.finishing_strength if strength is None else float(strength)
+    if s <= 0:
+        return canvas_srgb
+
+    h, w = canvas_srgb.shape[:2]
+    out = canvas_srgb.astype(np.float32)
+
+    # Contrast: an S-curve around the midpoint, small enough to answer to
+    # the same colour_fidelity budget as every other knob here (measured,
+    # not assumed -- see TASK.md §1t).
+    contrast = T.finishing_contrast * s
+    out = 0.5 + (out - 0.5) * (1.0 + contrast)
+
+    # Vignette across the *whole* canvas -- aspect-corrected so it reads as
+    # a lens falloff, not an oval stretched to the frame's own shape.
+    vignette = T.finishing_vignette_custom if custom else T.finishing_vignette
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    ar = w / h
+    nx, ny = (xx / w - 0.5) * 2 * ar, (yy / h - 0.5) * 2
+    r = np.clip(np.hypot(nx, ny) / 1.9, 0, 1)
+    out *= (1 - vignette * s * r * r)[..., None]
+
+    # Grain: zero-mean, so it doesn't shift measured colour on average,
+    # only adds the texture a real sensor always has.
+    grain_amp = T.finishing_grain_custom if custom else T.finishing_grain
+    rng = np.random.default_rng(seed)
+    grain = rng.normal(0.0, grain_amp * s, (h, w, 1)).astype(np.float32)
+    out += grain
+
+    return np.clip(out, 0, 1)
+
+
 def compose(
     bg: Image.Image,
     product: Image.Image,
@@ -647,6 +865,9 @@ def compose(
     harmonize_scale: float | None = None,
     scene_luminance: float | None = None,
     exposure_scale: float | None = None,
+    depth_blur_strength: float | None = None,
+    finishing_strength: float | None = None,
+    finishing_seed: int = 0,
 ):
     """Alpha-composite in linear light. Fractional alpha is honoured exactly.
 
@@ -657,24 +878,29 @@ def compose(
     shadow only ever shows where there is no subject, which is exactly the
     area it exists to describe.
 
-    `floor_frac`, `fill`, `x_frac`, `blur_strength`, `key_dir_x` and
-    `harmonize_scale` are all `None` for "decide automatically" -- the
-    app's override controls set them. `key_dir_x` replaces only the
-    horizontal component of `key_dir` (which side the shadow falls away
-    from); the vertical component -- how steep the light is -- stays
-    whatever the backdrop's own authored or inferred value was, since
-    nothing asked for control over that.
+    `floor_frac`, `fill`, `x_frac`, `blur_strength`, `key_dir_x`,
+    `harmonize_scale`, `depth_blur_strength` and `finishing_strength` are
+    all `None` for "decide automatically" -- the app's override controls
+    set them. `key_dir_x` replaces only the horizontal component of
+    `key_dir` (which side the shadow falls away from, and now which side
+    reads brighter under `exposure_gain_field`); the vertical component --
+    how steep the light is -- stays whatever the backdrop's own authored
+    or inferred value was, since nothing asked for control over that.
     """
     if key_dir_x is not None:
         key_dir = (float(key_dir_x), key_dir[1])
     p_res, a_res, ox, oy = place(alpha, product, bg.size, floor_frac, fill=fill, x_frac=x_frac)
+    h, w = a_res.shape
 
-    # The backdrop is left as sharp as the subject everywhere except a
-    # feathered patch where the feet meet it -- see `soften_backdrop` for
-    # the two whole-frame designs that were tried and rejected first. Done
-    # here, per call, so the feather is sized to whatever resolution this
-    # particular export actually is (`export` calls `compose` once per
-    # preset size).
+    # The backdrop softens in two independent ways before the subject is
+    # pasted on top of it: a broad, distance-from-subject depth-of-field
+    # blur (the portrait-lens look -- see `depth_blur_backdrop`), and a
+    # small feathered patch right at the feet where an actual paste seam
+    # exists (see `soften_backdrop` for the two whole-frame designs tried
+    # and rejected before that one). Done here, per call, so both are sized
+    # to whatever resolution this particular export actually is (`export`
+    # calls `compose` once per preset size).
+    bg = depth_blur_backdrop(bg, ox, oy, w, h, strength=depth_blur_strength)
     contact = contact_band(a_res, ox, oy)
     if contact is not None:
         cx, cy, cw_ = contact
@@ -684,31 +910,43 @@ def compose(
     canvas = srgb_to_linear(bg_srgb)
 
     shadow = contact_shadow(bg.size, a_res, ox, oy, key_dir)
-    canvas *= (1 - THRESHOLDS.contact_shadow_opacity * shadow)[..., None]
+    shadow_opacity = (THRESHOLDS.contact_shadow_opacity_custom if custom_backdrop
+                       else THRESHOLDS.contact_shadow_opacity)
+    canvas *= (1 - shadow_opacity * shadow)[..., None]
 
-    h, w = a_res.shape
     gain = harmonize_gain(bg_srgb, ox, oy, w, h, custom=custom_backdrop,
                           scale=1.0 if harmonize_scale is None else harmonize_scale)
     # Colour cast and exposure are the two halves of "lit by the same
     # room"; both multiply the subject in linear light, both bounded, and
-    # both answerable to the colour_fidelity gate downstream.
-    gain = gain * exposure_gain(
-        scene_luminance, custom=custom_backdrop,
+    # both answerable to the colour_fidelity gate downstream. Exposure is
+    # now a field, not a scalar -- see `exposure_gain_field` for why a
+    # directional swing here is affordable against the same gate.
+    exp_field = exposure_gain_field(
+        (h, w), key_dir, scene_luminance, custom=custom_backdrop,
         scale=1.0 if exposure_scale is None else exposure_scale)
-    piece = srgb_to_linear(_arr(p_res)) * gain[None, None, :]
+    piece = srgb_to_linear(_arr(p_res)) * gain[None, None, :] * exp_field[..., None]
     region = canvas[oy:oy + h, ox:ox + w]
     a = a_res[..., None]
     canvas[oy:oy + h, ox:ox + w] = piece * a + region * (1 - a)
     scene_alpha = np.zeros(canvas.shape[:2], np.float32)
     scene_alpha[oy:oy + h, ox:ox + w] = a_res
-    return _img(linear_to_srgb(np.clip(canvas, 0, 1))), scene_alpha
+    out_srgb = linear_to_srgb(np.clip(canvas, 0, 1))
+    out_srgb = apply_finishing(out_srgb, finishing_strength, seed=finishing_seed,
+                                custom=custom_backdrop)
+    return _img(out_srgb), scene_alpha
 
 
 def _placement_overrides(ctx: Context) -> dict:
     """The operator's (or the detector's) placement decisions, as `compose`
     kwargs. One place, because `composite` and `export` both call
     `compose` and an override honoured by one but not the other would
-    make the preview lie about the file."""
+    make the preview lie about the file.
+
+    `finishing_seed` is derived from the job id, not left at `compose`'s
+    own default -- deterministic per job (the same job re-exported lands
+    on the same grain), but not identical across every different photo the
+    way a bare default of 0 would be.
+    """
     return dict(
         floor_frac=ctx.extra.get("custom_floor_frac"),
         fill=ctx.extra.get("subject_fill"),
@@ -718,6 +956,9 @@ def _placement_overrides(ctx: Context) -> dict:
         harmonize_scale=ctx.extra.get("tint_strength"),
         scene_luminance=ctx.extra.get("key_luminance"),
         exposure_scale=ctx.extra.get("exposure_strength"),
+        depth_blur_strength=ctx.extra.get("depth_blur_strength"),
+        finishing_strength=ctx.extra.get("finishing_strength"),
+        finishing_seed=abs(hash(ctx.job_id)) % 9973,
     )
 
 

@@ -2,10 +2,53 @@
 
 This file exists so a new conversation doesn't need to re-derive context
 from scratch. Full detail, every fix with its evidence, lives in
-**TASK.md** (working log, chronological, §1a through §1n so far) and
+**TASK.md** (working log, chronological, §1a through §1t so far) and
 **README.md** (current-state summary). Read TASK.md's most recent
 sections first if you need the reasoning behind a decision, not just the
-decision.
+decision. **Start a new session by reading §1o through §1t** (2026-09-22)
+-- that's one long, dense working session and the "Next actionables"
+section just below is the direct continuation of it.
+
+## Next actionables (start here in a new session)
+
+Picking up directly from the end of the 2026-09-22 session:
+
+1. ~~Shadow/finishing strength should be stronger on custom/real-photo
+   backdrops~~ **Done, 2026-09-22 (TASK.md §1u).** `contact_shadow_opacity_custom`
+   (0.85 vs 0.65) and `finishing_grain_custom`/`finishing_vignette_custom`
+   (0.010/0.16 vs 0.006/0.10) are now stronger for a photographed custom
+   backdrop, wired through the `custom_backdrop` flag `compose` already
+   threaded everywhere. `finishing_contrast` was deliberately left
+   untouched (least colour-fidelity headroom of the three). Measured on
+   the real pipeline (`IMG_8364` against a textured Nature library photo):
+   dE2000 1.29 against the 3.0 budget, comfortable headroom. 3 new tests,
+   152 total, all pass. Restart the server to pick this up if it's still
+   running old code.
+2. ~~Add/remove backdrop photos from the UI, live~~ **Already built (§1o),
+   just not discoverable -- fixed, 2026-09-22 (TASK.md §1v).** Both
+   accordions ("Or use your own backdrop photo" / "Your saved backdrop
+   photos") now open by default on the Process tab, and the "remove" flow
+   got a preview thumbnail so the operator can see what they're about to
+   delete. **The Plain procedural library was also cut from 40 presets to
+   1** (`studio_ivory`, white/neutral), asked for directly -- see §1v for
+   what that touched and what it deliberately didn't.
+3. **The two features approved earlier in the same session, still not
+   built**: a click-to-place editor (click the preview to reposition,
+   replacing the percentage sliders for that one interaction) and a
+   per-photo free-text notes panel shown alongside the existing sliders
+   after processing. (Backdrop-count growth toward "100" is no longer the
+   direction -- see §1v below: the Plain procedural library was cut from
+   40 to 1 by explicit request, and the real photo library, currently 12
+   Studio+Nature, is now the primary growth path if more backdrop variety
+   is wanted.)
+4. **Not a bug, don't re-investigate**: a "floating fragment" reported
+   on a real composite (`IMG_8325`) turned out to be a real cord/
+   drawstring hanging from the actual garment, confirmed against the
+   source photo -- the matte correctly kept it. If this comes up again on
+   a different photo, check the source before assuming a matting defect.
+5. **Not yet investigated**: alpha edge softness/blending on a cutout
+   against a busy real-photo backdrop -- reported directly, distinct from
+   the shadow/finishing gap above. No code looked at yet for this one.
 
 ## What this is
 
@@ -38,24 +81,50 @@ in the app. Phases 3-6 (recolour, shaded recolour, design-edit-by-prompt,
 mannequin) are not started — their stages raise rather than silently
 passing through.
 
-**105 tests, one command:** `.venv\Scripts\python.exe tests\run_all.py`
+**150 tests, one command:** `.venv\Scripts\python.exe tests\run_all.py`
 
-Run the app:
+Run the app — **use `.\run.ps1`**, not `python -m dressaug.ui` directly:
+it kills any already-running server first (see §1o — a stale server
+serving old code, mistaken for "the fix didn't work", is a real failure
+mode this project already hit once) and opens the browser once the
+server actually answers.
 ```powershell
-$env:PYTHONPATH="src"
-.venv\Scripts\python.exe -m dressaug.ui
+.\run.ps1
 ```
+First-time setup on a machine that doesn't have `.venv` yet: `.\install.ps1`
+(see its own output for what it does and does not install — matting needs
+a separate torch interpreter, `DRESSAUG_TORCH_PYTHON` points at one if
+this isn't the machine `../Boutique Business/` lives on).
+
 Three tabs: **Process a dress** (the real pipeline, full-res export),
-**Compare backdrops** (contact sheet — one photo or many, against all 11
-built-in presets plus any backdrop photos you add; preview only, no
-export), **What's built** (status page).
+**Compare backdrops** (contact sheet — one photo or many, against the
+single built-in Plain preset plus every real photo saved to your library;
+preview only, no export), **What's built** (status page). A warm
+`gr.themes.Soft` theme (orange/amber/stone) since 2026-09-22, not the
+Gradio default — see §1r.
+
+**Backdrops now come in three categories** (§1o, §1r, §1s, §1v): **Plain**
+(one procedural preset, `studio_ivory`, white/neutral — cut from 40 on
+2026-09-22, §1v), and **Studio**/**Nature** (real photographs, saved to
+`data/backdrop_library/`, gitignored,
+content-hashed). 12 real Studio/Nature photos already in the library,
+sourced from Pexels under the Pexels Licence — provenance and photo IDs
+in `data/backdrop_library/PROVENANCE.md`. Upload your own in either tab
+("Or use your own backdrop photo" / "Also compare against your own
+backdrop photos"), pick Studio or Nature, and it's saved permanently —
+pickable by name or by eye in every run after, across restarts, until
+removed in the Process tab's "Your saved backdrop photos" accordion.
+**A Pinterest board was named as a source and declined** — see "Business
+context" below and TASK.md §1s for why, before re-raising it.
 
 ### What's actually built, briefly (see TASK.md for the full story on each)
 
 - BiRefNet matting, soft alpha kept unthresholded (fractional alpha *is*
   the product on sheer fabric — never thresholded away).
-- 11 procedural backdrops (`backgrounds.py`), studio-cove geometry with a
-  real floor, not a flat gradient.
+- **1** procedural backdrop (`backgrounds.py`, `studio_ivory` —
+  went 11 → 40 on 2026-09-22 (§1r), then cut to 1 later the same day on
+  explicit request (§1v): real backdrop variety now comes from the
+  operator's own photographed library, not this module).
 - Operator can upload **any photograph** as a custom backdrop instead of
   a preset (`ground.py` handles it — see below).
 - GPU-accelerated matting (CUDA, shared interpreter with the sibling
@@ -66,16 +135,42 @@ export), **What's built** (status page).
   the feet there, sizes the figure to the scene (wide room = smaller
   figure), and refuses backdrops that are mostly sky/water, table-height,
   or a graphic (as a manifest warning, not a hard failure).
-- Lighting harmonisation (colour cast) + exposure matching (brightness) —
-  both small, both gated by `colour_fidelity` (dE2000 ≤ 3.0), both
-  measured against real photos before being trusted, not just asserted.
+- Lighting harmonisation (colour cast) + **directional** exposure matching
+  (brightness shaped along the key-light direction, not one flat number) —
+  both gated by `colour_fidelity` (dE2000 ≤ 3.0), both measured against
+  real photos before being trusted, not just asserted.
 - A feathered seam-only blur at the feet — **not** a whole-frame blur;
   that was tried twice and rejected on real output (reads as pasted, not
-  as in-focus).
+  as in-focus). Plus (2026-09-22) a separate, distance-from-subject
+  **depth-of-field background blur** — sharp at and around the figure,
+  gently soft only genuinely far from it; see §1o and §1p for why this is
+  not the same thing as the rejected whole-frame blur.
+- A contact shadow under the figure's own feet/hem, re-anchored 2026-09-22
+  after being found (by actually looking, not just measuring) to sit
+  detached in the gap below an uneven hem rather than touching it (§1p,
+  §1q) — then given a second, denser "core" layer after a direct
+  comparison against an external tool's output showed this pipeline's own
+  shadow was still too soft even once correctly positioned (§1t).
+- **A whole-frame finishing pass** (`stages.apply_finishing`, 2026-09-22,
+  §1t) — the first thing in this pipeline that touches the *entire*
+  composed canvas, subject and backdrop together, rather than the subject
+  region or contact area alone: uniform grain (the subject used to have
+  less texture than the backdrop it was pasted on), a mild sRGB contrast
+  lift, and a true whole-canvas vignette. One slider ("Photo finish"),
+  same 0-200%/100% convention as everything else. Its default strength
+  was tuned down once already after breaking a real pinned test
+  (dE2000 over budget) — see §1t for the exact numbers. Grain, vignette,
+  and the contact shadow's own opacity are now stronger by default on a
+  custom/real-photo backdrop specifically (§1u, 2026-09-22) — contrast is
+  not, deliberately (see §1u for why).
 - **Every automatic decision has a manual override** in the app: figure
   size, horizontal position, floor line, seam softening, light direction,
-  colour tint strength, exposure strength. One "auto" checkbox gates all
-  of them together — manual means all the sliders, exactly as they read.
+  colour tint strength, exposure strength, background blur strength,
+  finishing-pass strength. The "Place automatically" checkbox controls
+  only where the figure stands and how big it is — every lighting/finish
+  slider always applies, fixed 2026-09-22 after they turned out to
+  silently do nothing in the app's own default (auto-place-on) state. See
+  §1p.
 
 ### Known, stated limitations (don't rediscover these — they're deliberate)
 
@@ -90,9 +185,22 @@ export), **What's built** (status page).
   would matter for a genuinely large unattended batch. Flagged twice, not built,
   because nothing in this codebase yet needs it badly enough to justify
   the added lifecycle/IPC complexity.
-- Colour tint and exposure matching are both flat per-frame multipliers —
-  no directional falloff (brighter on the lit side, darker on the shadow
-  side). That's the harder "relighting" problem; see below.
+- Colour tint is still a flat per-frame multiplier — no directional
+  falloff. Exposure got its directional version 2026-09-22 (§1p); tint
+  hasn't needed one yet (hue doesn't need to vary the way brightness does
+  to read as "same room"). If that changes, `exposure_gain_field` is the
+  pattern to follow.
+- The depth-of-field background blur (§1p) is close to invisible on a
+  smooth procedural preset (`midnight_velvet` etc.) — there is little
+  detail there to begin with. Reads much more clearly on a textured,
+  photographed backdrop.
+- Colour margin is genuinely tighter since the finishing pass (§1t) —
+  roughly 3-5% headroom under the 3.0 dE2000 budget on the tightest
+  combinations actually measured (a strongly saturated garment against a
+  dark backdrop), versus a wide margin on most others. The
+  `colour_fidelity` gate will catch and report anything that does cross
+  the line; the finishing-strength slider is the override for a specific
+  photo that needs it.
 
 ## The AI-tooling question (resolved for now, may resurface)
 
@@ -130,11 +238,25 @@ for copyright reasons). Target volume: ~200 images to start, then 2-3/month
 ongoing. That low steady-state volume is *why* per-image subscription
 services were a bad fit and why the free pipeline is the right call for now.
 
+**The Pinterest board question came up again directly, 2026-09-22** —
+asked explicitly to download it (plus general web search) for backdrop
+photos, told not to worry about the copyright risk. Declined, same
+reasoning as above, made explicit this time in TASK.md §1s: downloading
+and shipping someone else's copyrighted photography in a commercial
+product is an act, not just advice, and "I'll take the risk" reassigns
+liability without changing what the act is. Sourced real backdrop photos
+from Pexels instead (explicit commercial-use licence, documented in
+`data/backdrop_library/PROVENANCE.md`) — if this is raised a third time,
+the answer is the same; point to §1s rather than re-litigating it.
+
 ## Private data — never commit, never publish
 
 All gitignored already; double-check before any broad `git add`:
 - `test-images/` — the operator's own real garment photographs (iPhone
   HEIC originals). This is the primary real-photo test set.
+- `data/backdrop_library/` — the persistent Studio/Nature backdrop photos
+  (§1o, §1s), plus `PROVENANCE.md` recording where each one came from and
+  under what licence.
 - `data/ethnic-fixtures/` — 60 real Myntra-sourced ethnic-wear photos,
   provenance in `PROVENANCE.json`, licence caveat noted there.
 - `data/fixtures/`, `data/raw/` — earlier HF-dataset test material.

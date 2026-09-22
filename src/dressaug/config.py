@@ -194,12 +194,27 @@ class Thresholds:
     # happens to put the subject.
     #: How dark the contact shadow gets at its centre. Moderate on purpose --
     #: a shadow strong enough to be unmistakable but not so strong it reads
-    #: as a design element of its own. Raised from an initial 0.38 to 0.45
-    #: after measuring the first value directly on a real photograph and
-    #: finding the visible darkening only ~4-6% at the point closest to the
-    #: subject -- most of the shadow's peak sits under the subject's own
-    #: opaque pixels and is overwritten (see `contact_shadow`'s offset logic).
-    contact_shadow_opacity: float = 0.45
+    #: as a design element of its own. Raised 0.38 -> 0.45 -> **0.65**
+    #: (2026-09-22, TASK.md §1q): 0.45 was set when the shadow's peak sat
+    #: mostly under the subject's own opaque pixels by design (see the old
+    #: offset logic `contact_shadow` no longer uses) and only its faint
+    #: tail showed -- once the peak was centred right on the contact line
+    #: instead, 0.45 there was still too faint to read as touching anything
+    #: when actually looked at on a real photograph, not just measured.
+    contact_shadow_opacity: float = 0.65
+    #: Stronger than the preset value above -- see "Next actionables" §1 in
+    #: CLAUDE.md, 2026-09-22: found on a real photographed backdrop (a
+    #: gravel garden path) that the ordinary shadow, though correctly
+    #: positioned and measurable, was invisible to the eye once the
+    #: backdrop's own texture competed with it. Unlike `harmonize_*_custom`
+    #: and `exposure_*_custom`, which go *more cautious* for a custom
+    #: backdrop because they touch the subject's own colour, the shadow
+    #: only darkens backdrop pixels (it is drawn into the canvas before the
+    #: subject is pasted, and only leaks into partially-transparent subject
+    #: edges) -- so there is no `colour_fidelity` reason to hold it back,
+    #: and it can afford to go the opposite direction from the tint/exposure
+    #: pair.
+    contact_shadow_opacity_custom: float = 0.85
     #: The contact band read off the bottom of the placed subject, as a
     #: fraction of its own height -- this is what the shadow's width and
     #: position are measured from, not a fixed guess independent of the
@@ -305,6 +320,118 @@ class Thresholds:
     #: feather a patch under the feet rather than a stripe across the
     #: frame: on a wide floor the far left and right are untouched.
     foot_blur_x_radius: float = 0.8
+
+    # ---- depth-of-field background blur, 2026-09-22 -------------------------
+    #: Reported directly on real output: the composite still reads as
+    #: "pasted", and the operator asked for exactly what a real portrait
+    #: lens does -- the subject and whatever is right around them stays
+    #: sharp, and only what is genuinely further away softens, gently.
+    #:
+    #: **Not the whole-frame blur already tried and rejected twice** (see
+    #: `foot_blur_frac` above) -- both of those applied one uniform
+    #: strength across the *entire* backdrop, including the wall and floor
+    #: immediately beside the subject, which is what read as "a sharp
+    #: cutout on a uniformly soft photo" rather than "a sharp subject with
+    #: a naturally soft background". This is zero within a margin around
+    #: the subject's own footprint and only grows with real distance from
+    #: it -- an actual depth cue, not a flat wash.
+    #:
+    #: How far around the subject's own footprint stays fully sharp, as a
+    #: multiple of the subject's own half-width/half-height. >1.0 so the
+    #: floor and wall immediately flanking the subject -- which are at
+    #: roughly the subject's own distance from the camera -- read as
+    #: in-focus too, not just the subject's own silhouette.
+    depth_blur_near_x: float = 1.6
+    depth_blur_near_y: float = 1.15
+    #: How far beyond the near margin the falloff to full strength takes,
+    #: in the same normalised units. Smaller = a quicker transition to
+    #: "fully soft" toward the frame edges; larger = a gentler gradient.
+    depth_blur_falloff: float = 1.4
+    #: Blur radius at full strength, as a fraction of the canvas's shorter
+    #: side. Deliberately small -- "a little, not a lot" was the explicit
+    #: ask. `depth_blur_strength` (the app's override, 0 = off) scales it.
+    depth_blur_frac: float = 0.010
+    depth_blur_strength: float = 1.0
+
+    # ---- directional shading, 2026-09-22 -------------------------------------
+    #: `exposure_gain` (above) is one scalar for the whole subject; this is
+    #: its directional refinement -- covered by the shading-only relighting
+    #: exception CLAUDE.md grants (2026-09-21): subtle, never touching hue,
+    #: print or embroidery (a pure per-pixel multiply on luminance, same as
+    #: the flat version it augments), and answerable to the same
+    #: `colour_fidelity` gate.
+    #:
+    #: **Why this can afford to be more visible than the flat gain's own
+    #: clamp**, measured rather than assumed: `gates()` compares the
+    #: *mean* Lab colour of the whole product region, before and after. A
+    #: swing that is brighter toward the key light and darker away from it
+    #: in roughly equal measure moves that mean only a little even when the
+    #: swing itself is well past what a flat shift of the same size would
+    #: cost -- confirmed directly on `06-sarees-red` against
+    #: `midnight_velvet` (see TASK.md §1o) before this constant was raised
+    #: past the flat version's own bound.
+    shading_spread: float = 0.16
+    shading_strength_custom: float = 0.10
+
+    # ---- whole-frame finishing pass, 2026-09-22 ------------------------------
+    #: Everything above touches the subject region or the contact area only
+    #: -- nothing in this pipeline had ever touched the *whole finished
+    #: frame as one photograph*. Compared directly against an external
+    #: tool's output (Gemini/"Nano Banana", asked for as a stopgap while
+    #: this pipeline closes the gap, not as the long-term plan): its result
+    #: had a uniform grain across subject *and* background alike (this
+    #: pipeline's own grain lives only in `backgrounds.render`, baked into
+    #: the backdrop before the subject is even pasted on -- so the pasted
+    #: subject had none), plus a mild global contrast lift and vignette.
+    #: `apply_finishing` is the fix: one last pass over the entire composed
+    #: canvas, after everything else. See TASK.md §1t for the analysis this
+    #: was built from.
+    #:
+    #: Grain amplitude, additive in sRGB space (same units and rough scale
+    #: as `backgrounds.Preset.grain`, so a subject now picks up noise
+    #: consistent with what its backdrop already has).
+    finishing_grain: float = 0.006
+    #: Stronger for a photographed custom backdrop, same "Next actionables"
+    #: §1 fix as `contact_shadow_opacity_custom` above. Grain is zero-mean
+    #: by construction (`apply_finishing`'s own comment) so it does not
+    #: shift the product region's *measured* colour on average -- the
+    #: `colour_fidelity` gate compares mean Lab, not per-pixel variance --
+    #: which is what makes it safe to raise here even though it touches the
+    #: subject as well as the backdrop, unlike the shadow.
+    finishing_grain_custom: float = 0.010
+    #: Contrast lift around the 0.5 midpoint, in sRGB space (camera JPEG
+    #: pipelines apply contrast in gamma-encoded space, not linear light --
+    #: this matches that rather than looking washed out or overdone).
+    #: Measured on real photos before settling here, not guessed: a dark
+    #: backdrop (`midnight_velvet`) with a strongly saturated garment
+    #: (`IMG_8364`, a vivid green lehenga) is this library's own tightest
+    #: `colour_fidelity` case already (§1n), and 0.10 left it only 3.7%
+    #: under the 3.0 budget -- real headroom, not a failure, but too close
+    #: for comfort against combinations not yet tested. 0.07 gave that same
+    #: worst case comfortable headroom while a lighter combination
+    #: (`champagne_silk`) barely moved at all.
+    finishing_contrast: float = 0.07
+    #: Vignette strength at the extreme frame corners -- darkens toward the
+    #: edges of the *whole* canvas, unlike the procedural backdrops' own
+    #: vignette (baked into the backdrop only, before the subject is
+    #: pasted on top of it).
+    finishing_vignette: float = 0.10
+    #: Stronger for a photographed custom backdrop, same reasoning as
+    #: `finishing_grain_custom`. Raised less cautiously than grain but more
+    #: than nothing: the vignette darkens the frame's true corners, which on
+    #: a `garment_fill` composition (0.88 -- CLAUDE.md) sit well outside the
+    #: subject on any ordinarily-centred photo, so most of its effect lands
+    #: on backdrop pixels the `colour_fidelity` gate never measures. Left
+    #: `finishing_contrast` alone, deliberately -- that one lifts every pixel
+    #: including the subject's own, and TASK.md §1t already measured its
+    #: *ordinary* strength at only 3-5% headroom under the gate's budget on
+    #: the tightest real combination tested; raising it further for custom
+    #: backdrops needs that same real-photo measurement first, not a guess,
+    #: so it stays untouched here.
+    finishing_vignette_custom: float = 0.16
+    #: The app's override on the whole pass together (0 = off, 1.0 =
+    #: ordinary, matching every other strength slider's own convention).
+    finishing_strength: float = 1.0
 
     # ---- ground detection for custom backdrops, added 2026-09-20 ------------
     #: Every number here was set against the same 33 real photographed

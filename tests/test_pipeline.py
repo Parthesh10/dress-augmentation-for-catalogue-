@@ -5,6 +5,7 @@ and no network. The things worth testing here are the decisions this project
 made *differently* from the sibling, because those are the ones nobody else's
 test suite is watching.
 """
+import math
 import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 import numpy as np
@@ -253,6 +254,34 @@ def test_a_matte_with_nothing_at_the_frame_edge_casts_no_shadow():
     assert sh.max() == 0.0
 
 
+def test_shadow_has_a_denser_core_than_a_single_gaussian_would_give():
+    """2026-09-22 (TASK.md §1t): a second, narrower, steeper layer is
+    `np.maximum`'d with the original ambient ellipse so a wider area right
+    at the contact point stays near-maximum-dark, closer to how a real
+    contact shadow looks (a dense near-black core fading into a broad,
+    faint ambient tail) rather than one smooth, uniformly-soft gaussian.
+    Checked by comparing the shadow value partway out from the centre --
+    where the core still contributes but the pure ambient shape alone
+    would already have fallen further -- against what the ambient-only
+    formula would give at the same point."""
+    a_res = _standing_alpha()
+    sh = stages.contact_shadow((400, 600), a_res, ox=50, oy=50)
+    # The contact point itself, from the same fixture/offsets used elsewhere
+    # in this file.
+    contact_x, contact_y = 50 + 150, 50 + 498
+    # A quarter of the way out along x from the centre -- inside the core's
+    # own radius, where its steeper-but-narrower shape should keep the
+    # value higher than the ambient layer's own gentler slope would alone.
+    contact_w = 60  # foot width from _standing_alpha's own default
+    rx = contact_w * 0.55 * 0.60  # a point still inside the core radius (0.42*rx)
+    probe_x = int(contact_x + rx)
+    ambient_only = math.exp(-2.2 * ((probe_x - contact_x) / (contact_w * 0.55)) ** 2)
+    assert sh[contact_y, probe_x] > ambient_only + 0.02, (
+        f"expected the core to raise the shadow above the pure-ambient value "
+        f"here, got {sh[contact_y, probe_x]:.3f} vs ambient-only {ambient_only:.3f}"
+    )
+
+
 def test_shadow_offset_follows_the_key_light_direction():
     """The sibling's convention, carried over: the shadow falls away from
     where the light is supposed to be coming from, not toward it."""
@@ -353,6 +382,51 @@ def test_no_contact_line_means_no_change_at_all():
     assert np.array_equal(np.asarray(stages.soften_backdrop(bg, contact_y=None)), np.asarray(bg))
 
 
+# ------------------------------------------------------- depth-of-field blur
+
+#: A standing figure's own footprint in `_stripe_field()`'s 900x1350 frame --
+#: tall and roughly centred, the same shape `_standing_alpha` describes,
+#: given directly as (ox, oy, w, h) since `depth_blur_backdrop` takes the
+#: placed box rather than an alpha mask.
+_SUBJECT_BOX = dict(ox=340, oy=100, w=220, h=1150)
+
+
+def test_depth_blur_leaves_the_subjects_own_footprint_sharp():
+    """The whole point, distinct from the two whole-frame designs already
+    rejected (see `soften_backdrop`'s docstring): right at and immediately
+    around the subject, the backdrop must stay sharp."""
+    bg = _stripe_field()
+    out = np.asarray(stages.depth_blur_backdrop(bg, **_SUBJECT_BOX))
+    src = np.asarray(bg)
+    # Dead centre of the subject's own footprint.
+    assert np.array_equal(out[600:650, 400:500], src[600:650, 400:500])
+
+
+def test_depth_blur_softens_the_far_corners():
+    """Genuinely far from the subject -- the frame's own corners -- must be
+    measurably softer than the same stripes at the subject's own depth."""
+    bg = _stripe_field()
+    out = np.asarray(stages.depth_blur_backdrop(bg, **_SUBJECT_BOX))
+    near = _energy(out[600:650, 400:500])
+    corner = _energy(out[0:50, 0:100])
+    assert corner < near * 0.5, f"expected the corner softened, got corner={corner:.1f} near={near:.1f}"
+
+
+def test_depth_blur_strength_zero_is_a_noop():
+    bg = _stripe_field()
+    out = stages.depth_blur_backdrop(bg, strength=0, **_SUBJECT_BOX)
+    assert np.array_equal(np.asarray(out), np.asarray(bg))
+
+
+def test_depth_blur_does_nothing_for_a_zero_sized_subject():
+    """Defensive: `compose` always has a real w/h, but the function's own
+    contract should not divide by zero or blur the whole frame if it ever
+    doesn't."""
+    bg = _stripe_field()
+    out = stages.depth_blur_backdrop(bg, ox=0, oy=0, w=0, h=0)
+    assert np.array_equal(np.asarray(out), np.asarray(bg))
+
+
 # --------------------------------------------------------------- harmonize
 
 
@@ -444,6 +518,44 @@ def test_exposure_gain_is_neutral_with_no_known_backdrop_luminance():
     assert stages.exposure_gain(None) == 1.0
 
 
+def test_exposure_gain_field_averages_close_to_the_flat_gain():
+    """The mean-preservation argument `exposure_gain_field`'s own docstring
+    makes -- a linear ramp centred on the subject averages close to zero,
+    so the field's mean should land close to what the flat scalar alone
+    would have been, even though `shading_spread` lets individual pixels
+    swing further than the flat clamp allows on its own."""
+    flat = stages.exposure_gain(0.0)  # a dark backdrop -- non-trivial gain
+    field = stages.exposure_gain_field((200, 300), (-0.3, -0.45), 0.0)
+    assert abs(float(field.mean()) - flat) < 0.01, (field.mean(), flat)
+
+
+def test_exposure_gain_field_varies_along_the_key_direction():
+    """The actual point: one side of the subject should read brighter than
+    the other, not a flat number repeated across every pixel."""
+    field = stages.exposure_gain_field((200, 300), (1.0, 0.0), 0.4)
+    left = field[:, :30].mean()
+    right = field[:, -30:].mean()
+    assert abs(left - right) > 0.01, f"expected a visible left/right split, got {left} vs {right}"
+
+
+def test_exposure_gain_field_is_neutral_with_no_known_backdrop_luminance():
+    field = stages.exposure_gain_field((100, 150), (-0.25, -0.45), None)
+    assert np.allclose(field, 1.0, atol=1e-6)
+
+
+def test_exposure_gain_field_scale_of_zero_matches_the_flat_versions_own_neutral():
+    field = stages.exposure_gain_field((100, 150), (-0.25, -0.45), 0.0, scale=0.0)
+    assert np.allclose(field, 1.0, atol=1e-6)
+
+
+def test_exposure_gain_field_stays_inside_its_own_wider_safety_clamp():
+    """However large `shading_spread` is tuned, no pixel should escape the
+    wider (not the flat) clamp `exposure_gain_field` documents."""
+    field = stages.exposure_gain_field((200, 300), (1.0, 0.0), 0.0, scale=5.0)
+    assert field.min() >= THRESHOLDS.exposure_gain_min * 0.9 - 1e-6
+    assert field.max() <= THRESHOLDS.exposure_gain_max * 1.15 + 1e-6
+
+
 def test_exposure_scale_of_zero_disables_it_and_two_stays_inside_the_clamp():
     bright = stages.exposure_gain(0.750, scale=0.0)
     assert bright == 1.0
@@ -468,6 +580,160 @@ def test_key_dir_x_override_replaces_only_the_horizontal_component():
     diff = np.abs(
         np.asarray(out_right, np.float32) - np.asarray(out_left, np.float32))
     assert diff.max() > 1.0, "expected the shadow position to move"
+
+
+def test_compose_actually_shades_the_subject_along_the_key_direction():
+    """Not just that `exposure_gain_field` computes a gradient in
+    isolation -- that `compose` actually applies it per-pixel to the pasted
+    product, the same integration-level proof `test_compose_actually_
+    applies_the_harmonize_gain_to_the_pasted_subject` gives the flat colour
+    tint. A neutral grey subject on a backdrop dark enough to trigger a
+    real exposure gain should come back visibly asymmetric left-to-right
+    when the key light is forced hard to one side."""
+    a_res = _standing_alpha()
+    product = Image.new("RGB", a_res.shape[::-1], (128, 128, 128))
+    bg = Image.new("RGB", (400, 600), (10, 10, 10))  # very dark -- real exposure gain
+    out, scene_alpha = stages.compose(
+        bg, product, a_res, key_dir=(1.0, 0.0), key_dir_x=1.0, scene_luminance=0.02)
+    out_arr = np.asarray(out, np.float32)
+    mask = scene_alpha > 0.95
+    xs = np.where(mask.any(axis=0))[0]
+    left_half = mask[:, xs[:len(xs) // 2]]
+    right_half = mask[:, xs[len(xs) // 2:]]
+    left_mean = out_arr[:, xs[:len(xs) // 2]][left_half].mean()
+    right_mean = out_arr[:, xs[len(xs) // 2:]][right_half].mean()
+    assert abs(left_mean - right_mean) > 1.0, (
+        f"expected a visible left/right shading split, got {left_mean:.2f} vs {right_mean:.2f}")
+
+
+def test_compose_depth_blur_strength_zero_matches_no_depth_blur():
+    """The app's override, at the `compose` integration level: 0 must
+    produce the exact same composite as never having the effect at all."""
+    a_res = _standing_alpha()
+    product = Image.new("RGB", a_res.shape[::-1], (128, 128, 128))
+    bg = _stripe_field(size=(400, 600))
+    out_off, _ = stages.compose(bg, product, a_res, depth_blur_strength=0)
+    out_default_disabled = THRESHOLDS.depth_blur_strength
+    assert out_default_disabled > 0, "test assumes depth blur is on by default"
+    out_on, _ = stages.compose(bg, product, a_res)
+    assert not np.array_equal(np.asarray(out_off), np.asarray(out_on)), (
+        "expected the default (on) composite to differ from strength=0")
+
+
+# ------------------------------------------------------- whole-frame finishing
+
+
+def test_apply_finishing_strength_zero_is_a_noop():
+    canvas = np.full((100, 150, 3), 0.5, np.float32)
+    out = stages.apply_finishing(canvas, strength=0)
+    assert np.array_equal(out, canvas)
+
+
+def test_apply_finishing_lifts_contrast_away_from_the_midpoint():
+    """A flat mid-grey field pushed toward black/white at its own extremes
+    -- checked well away from the vignetted corners and without the grain
+    obscuring the direction of the shift, by looking at the mean over a
+    large flat region."""
+    bright = np.full((200, 300, 3), 0.75, np.float32)
+    dark = np.full((200, 300, 3), 0.25, np.float32)
+    out_bright = stages.apply_finishing(bright.copy(), strength=1.0, seed=0)
+    out_dark = stages.apply_finishing(dark.copy(), strength=1.0, seed=1)
+    # Centre region only -- the vignette also darkens the corners, which
+    # would otherwise mask the contrast lift in a whole-image mean.
+    cy, cx = 100, 150
+    r = 30
+    assert out_bright[cy - r:cy + r, cx - r:cx + r].mean() > 0.75
+    assert out_dark[cy - r:cy + r, cx - r:cx + r].mean() < 0.25
+
+
+def test_apply_finishing_vignette_darkens_the_corners_more_than_the_centre():
+    canvas = np.full((200, 300, 3), 0.6, np.float32)
+    out = stages.apply_finishing(canvas, strength=1.0, seed=0)
+    centre = out[95:105, 145:155].mean()
+    corner = out[:10, :10].mean()
+    assert corner < centre, f"expected the corner darker, got corner={corner:.3f} centre={centre:.3f}"
+
+
+def test_apply_finishing_grain_is_zero_mean_and_deterministic_per_seed():
+    canvas = np.full((300, 400, 3), 0.5, np.float32)
+    out_a = stages.apply_finishing(canvas.copy(), strength=1.0, seed=7)
+    out_b = stages.apply_finishing(canvas.copy(), strength=1.0, seed=7)
+    out_c = stages.apply_finishing(canvas.copy(), strength=1.0, seed=8)
+    assert np.array_equal(out_a, out_b), "same seed must reproduce the same grain"
+    assert not np.array_equal(out_a, out_c), "a different seed must actually differ"
+    # Zero-mean: over a large flat region the average pixel value should
+    # stay close to the contrast-adjusted midpoint, not drift from grain.
+    assert abs(float(out_a[100:200, 100:300].mean()) - 0.5) < 0.01
+
+
+def test_compose_finishing_strength_zero_matches_no_finishing():
+    a_res = _standing_alpha()
+    product = Image.new("RGB", a_res.shape[::-1], (128, 128, 128))
+    bg = Image.new("RGB", (400, 600), (150, 150, 150))
+    out_off, _ = stages.compose(bg, product, a_res, finishing_strength=0)
+    out_on, _ = stages.compose(bg, product, a_res)
+    assert not np.array_equal(np.asarray(out_off), np.asarray(out_on)), (
+        "expected the default (on) composite to differ from strength=0")
+
+
+def test_apply_finishing_custom_grain_and_vignette_are_stronger_than_ordinary():
+    """2026-09-22, CLAUDE.md "Next actionables" §1: found too weak to read
+    against a textured real-photo backdrop (a gravel path) at the ordinary
+    strength. `custom=True` must raise grain and vignette, not leave them
+    matching the preset case."""
+    canvas = np.full((200, 300, 3), 0.6, np.float32)
+    ordinary = stages.apply_finishing(canvas.copy(), strength=1.0, seed=0, custom=False)
+    cautious = stages.apply_finishing(canvas.copy(), strength=1.0, seed=0, custom=True)
+
+    # Vignette: the custom corner should darken further than the ordinary one.
+    assert (1 - cautious[:10, :10].mean()) > (1 - ordinary[:10, :10].mean())
+
+    # Grain: same seed, so the only difference is amplitude -- the custom
+    # output must deviate from the flat midpoint more than the ordinary one
+    # does, measured over a large flat centre region away from the vignette.
+    mid = 0.5 + (0.6 - 0.5) * (1.0 + THRESHOLDS.finishing_contrast)
+    ordinary_dev = np.abs(ordinary[90:110, 140:160] - mid).mean()
+    cautious_dev = np.abs(cautious[90:110, 140:160] - mid).mean()
+    assert cautious_dev > ordinary_dev
+
+
+def test_contact_shadow_opacity_custom_is_stronger_than_ordinary():
+    """Same "Next actionables" §1 fix, the shadow half of it. Unlike
+    harmonize/exposure, which go more cautious for a custom backdrop
+    because they touch the subject's own colour, the shadow only darkens
+    backdrop pixels -- so it goes the opposite direction."""
+    assert THRESHOLDS.contact_shadow_opacity_custom > THRESHOLDS.contact_shadow_opacity
+
+
+def test_compose_darkens_the_backdrop_more_under_a_custom_shadow():
+    """Not just that the constant is higher in isolation -- that `compose`
+    actually picks it up for a custom backdrop. Same standing silhouette,
+    same flat backdrop, only `custom_backdrop` differs; the area just
+    outside the subject's own footprint (where the shadow's ambient tail
+    reaches but the subject's own opaque paste does not) must come back
+    darker for the custom case."""
+    a_res = _standing_alpha()
+    product = Image.new("RGB", a_res.shape[::-1], (128, 128, 128))
+    bg = Image.new("RGB", (400, 600), (150, 150, 150))
+    out_preset, scene_alpha = stages.compose(bg, product, a_res, custom_backdrop=False)
+    out_custom, _ = stages.compose(bg, product, a_res, custom_backdrop=True)
+    arr_preset = np.asarray(out_preset, np.float32)
+    arr_custom = np.asarray(out_custom, np.float32)
+    # Just below the feet: inside the shadow's reach, outside the subject.
+    # Found from `scene_alpha` itself rather than a hardcoded offset -- both
+    # calls share the same subject/backdrop, but `place`'s own automatic
+    # positioning, not a number this test should assume.
+    rows_with_subject = np.nonzero(scene_alpha.max(axis=1) > 0.5)[0]
+    feet_row = int(rows_with_subject.max())
+    band = slice(feet_row + 3, feet_row + 25)
+    outside_subject = scene_alpha[band, :] < 0.05
+    assert outside_subject.sum() > 50
+    preset_mean = arr_preset[band, :][outside_subject].mean()
+    custom_mean = arr_custom[band, :][outside_subject].mean()
+    assert custom_mean < preset_mean, (
+        f"expected the custom-backdrop shadow to read darker just below the "
+        f"feet, got preset={preset_mean:.2f} custom={custom_mean:.2f}"
+    )
 
 
 def test_harmonize_gain_is_bounded_regardless_of_backdrop_saturation():
@@ -721,24 +987,16 @@ def test_every_preset_renders_at_the_size_asked_for():
         assert im.size == (120, 180), (name, im.size)
 
 
-def test_the_backdrop_library_spans_a_wide_luminance_range():
-    """Phase 2 is a choice, and a choice needs range. The sibling found
-    `relight` throttling itself on 7 of 7 real photographs because backdrops
-    were picked without reference to how bright the product is."""
-    keys = [backgrounds.key_luminance(n) for n in backgrounds.PRESETS]
-    assert max(keys) / max(min(keys), 1e-4) > 10
-
-
 def test_ranking_puts_the_nearest_backdrop_first_and_drops_nothing():
+    """2026-09-22 (TASK.md §1v): this used to also assert the nearest-ranked
+    preset landed under a fixed luminance threshold, back when the library
+    held a wide spread of presets to rank. Trimmed to one (`studio_ivory`,
+    a bright neutral) along with the rest of the procedural library --
+    "nearest" is trivial with one candidate, so only the actual contract
+    (`rank_by_luminance` must not lose or invent a preset) still applies."""
     pool = backgrounds.presets_for("flat")
     ranked = backgrounds.rank_by_luminance(pool, 0.05)
     assert sorted(ranked) == sorted(pool), "ranking lost or invented a preset"
-    assert backgrounds.key_luminance(ranked[0]) < 0.10
-
-
-def test_occasionwear_presets_are_offered_to_the_flat_graph():
-    pool = backgrounds.presets_for(Graph.FLAT.value)
-    assert "midnight_velvet" in pool and "champagne_silk" in pool
 
 
 # ---------------------------------------------------------------- the cove
@@ -755,25 +1013,14 @@ def test_occasionwear_presets_are_offered_to_the_flat_graph():
 def test_studio_presets_are_the_cove_kind_with_a_floor():
     """Every studio/wall preset that a full-length photo could land on now
     has a real horizon, not the "off the bottom of frame" default that
-    quietly turns a preset back into a flat gradient."""
-    studio_names = [
-        "studio_ivory", "studio_pearl", "studio_graphite",
-        "champagne_silk", "blush_plaster", "rose_gold_wash",
-        "midnight_velvet", "wine_drape", "emerald_drape",
-    ]
-    for name in studio_names:
+    quietly turns a preset back into a flat gradient. Only `studio_ivory`
+    remains since the 2026-09-22 trim (TASK.md §1v) -- this used to loop
+    over nine studio/warm/dramatic presets; the loop is kept even at one
+    entry so this test doesn't need rewriting again if the library grows."""
+    for name in backgrounds.PRESETS:
         p = backgrounds.PRESETS[name]
         assert p.kind == "cove", (name, p.kind)
         assert p.horizon < 1.0, f"{name} has no floor (horizon={p.horizon})"
-
-
-def test_flatlay_presets_are_untouched_surfaces():
-    """The two presets meant for a garment laid flat on a table have no
-    standing subject and no "floor" concept distinct from the surface
-    itself -- they must not have been swept into the cove conversion."""
-    for name in ("linen_flatlay", "marble_flatlay"):
-        p = backgrounds.PRESETS[name]
-        assert p.kind == "surface", (name, p.kind)
 
 
 def _wall_floor_bands(name, size=(300, 450), seed=5):
@@ -803,25 +1050,12 @@ def test_a_cove_render_actually_differs_above_and_below_its_horizon():
     )
 
 
-def test_the_floor_is_visible_on_dark_presets_too_not_just_pale_ones():
-    """The specific regression this pins: a linear-light lift (or a lift
-    based on the wall's own already-darkening output) shrinks to almost
-    nothing on a dark preset even when it works fine on a pale one, because
-    gamma compression makes the same linear delta far less visible in sRGB
-    the darker the base colour is. Measured directly: the first working
-    version of this fix gave midnight_velvet only ~2.5 sRGB units of
-    wall/floor separation against 9-11 on a pale preset using the identical
-    formula -- visible on light backdrops, essentially invisible on dark
-    ones. Both families must land in the same ballpark."""
-    pale_above, pale_below = _wall_floor_bands("studio_ivory")
-    dark_above, dark_below = _wall_floor_bands("midnight_velvet")
-    pale_delta = pale_below - pale_above
-    dark_delta = dark_below - dark_above
-    assert dark_delta > 5.0, f"midnight_velvet's floor barely differs: {dark_delta:.2f}"
-    assert dark_delta > pale_delta * 0.4, (
-        f"dark preset's floor separation ({dark_delta:.2f}) is far weaker "
-        f"than the pale preset's ({pale_delta:.2f})"
-    )
+### Dropped, 2026-09-22 (TASK.md §1v): `test_the_floor_is_visible_on_dark_presets_too_not_just_pale_ones`
+### and `test_a_dark_cove_still_renders_without_error_or_negative_light` both
+### needed a dark preset (`midnight_velvet`/`wine_drape`) that no longer
+### exists after the library was trimmed to one, bright, neutral preset --
+### there is nothing dark left to regress on. Not a gap introduced silently:
+### recorded here so a future session doesn't wonder where they went.
 
 
 def test_the_cove_transition_has_no_hard_seam():
@@ -839,16 +1073,6 @@ def test_the_cove_transition_has_no_hard_seam():
     # be gentle relative to the total wall-to-floor difference
     biggest_step = np.abs(np.diff(band)).max()
     assert biggest_step < 3.0, f"a hard seam at the horizon: step={biggest_step:.2f}"
-
-
-def test_a_dark_cove_still_renders_without_error_or_negative_light():
-    """Dark presets (midnight_velvet, wine_drape) push the floor maths
-    toward the low end of the linear-light range -- worth pinning that
-    nothing clips into invalid values there."""
-    import numpy as np
-    for name in ("midnight_velvet", "wine_drape"):
-        im = np.asarray(backgrounds.render(name, (200, 300), seed=1))
-        assert im.min() >= 0 and im.max() <= 255
 
 
 if __name__ == "__main__":

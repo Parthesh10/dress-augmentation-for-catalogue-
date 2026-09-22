@@ -1292,6 +1292,777 @@ colour, or exposure model changed, only that every one of them can now be
 corrected by hand when it gets a specific photograph wrong.
 ---
 
+## 1o. A stale server, a decorative gallery, and backdrops that don't survive a restart, 2026-09-22
+
+### The ask
+
+Six things, reported together after looking at the running app: (1) a
+backdrop comparison batch looked identical to the previous day's, no
+visible improvement despite §1n's work; (2) find and fix why; (3) UI/UX
+that "many things are misleading than what we decided"; (4) how to
+install this as Windows software, move it to another machine, and whether
+to compile an .exe; (5) the backdrop gallery still shows plain procedural
+colours, not the real photos already sent; (6) a backdrop a user adds
+should still be there next time. Closing line: "take your own decisions
+as well and make it overall better."
+
+### 1 & 2. Why it looked unchanged -- a stale server, not a stale fix
+
+`git status --short` was clean and `git log` showed §1n's commit already
+on disk, so the *code* had the fix. `tasklist` told the real story:
+**two** `python -m dressaug.ui` processes were already running, both
+started well before this conversation, next to two more bare `python -u -`
+processes at several hundred MB each -- accumulated across sessions
+because CLAUDE.md's own rule ("restart the live Gradio server after any
+change... before reporting a fix as done") had been *stated* but nothing
+enforced it, so whichever port a browser tab happened to be pointed at
+could easily be serving whatever code was loaded when that process last
+started, not what's on disk now. A batch that "looks the same as
+yesterday" is exactly what that produces -- not a regression in the
+exposure/override work, a browser talking to a process that predates it.
+
+Fixed in two parts, not just "restarted it once":
+- Every stale `dressaug`-matching `python.exe` process killed, one fresh
+  instance started, and **verified past "it launched"** -- fetched
+  `/config` from the live server and grepped it for strings that only
+  exist in this session's new code ("Your saved backdrop photos"),
+  confirming the page actually being served is the page actually being
+  edited, not just that *a* server answered on the port.
+- `run.ps1` (new, see §4 below) now does this check-and-kill itself, every
+  time, before starting -- so "did I forget to restart it" stops being a
+  thing to remember by hand.
+
+### 3. UI/UX: two things that were actually broken, not just rough
+
+- **The backdrop gallery's "pick by eye" was decorative.** `build_process_tab`
+  has shown a gallery of backdrop thumbnails captioned "pick by eye in the
+  gallery... or by name here" since §1a, and nothing behind it ever
+  connected a click to the `Backdrop` radio -- clicking a thumbnail only
+  opened Gradio's own built-in image preview. Fixed with a real
+  `gallery.select()` handler (`_on_backdrop_gallery_select`) that maps the
+  clicked index back to the same backdrop value the radio uses.
+- **Two export sizes looked identical.** `process()`'s result gallery
+  showed bare images with no caption, so two different export presets of
+  the same photo were two visually-indistinguishable thumbnails -- exactly
+  the kind of thing that reads as "nothing happened" even when export
+  worked. Now captioned with the preset name and its pixel size.
+- **The status tab's "known issue" was stale.** It told operators to
+  "prefer the lighter backdrops" because of a pale edge on dark
+  backdrops -- the exact bug §5/P0 already fixed on 2026-09-19 (edge
+  decontamination). Removed, replaced with the limitations that are
+  actually still true today (ground-detector false positive on a flat
+  defocused photo, no warm-start worker, flat-multiplier tint/exposure) --
+  taken from CLAUDE.md's own "known, stated limitations" list rather than
+  invented fresh, so the two stay in agreement.
+
+### 5 & 6. A persistent backdrop library -- the same root cause, twice
+
+These turned out to be one gap, reported from two angles. "Or use your
+own backdrop photo" (§1j) only ever lived for the run it was uploaded in
+-- close the app, or start a fresh comparison, and it was gone, so a
+backdrop photo sent once had to be re-uploaded every single time. That is
+*why* the gallery still showed only procedural colours: nothing about
+uploading a photo ever made it a persistent option next to them.
+
+New module, `backdrop_library.py`: content-hashed JPEGs under
+`data/backdrop_library/` (gitignored -- private decor photos, same
+discipline as `test-images/`), a small `manifest.json` for the
+human-readable label, `add`/`remove`/`list_entries`/`thumbnail`. Hashed
+rather than named, so re-uploading the same photo twice (the obvious
+thing to happen once this exists) dedupes instead of accumulating copies.
+
+Wired through the UI without touching `process()` or `compare_backdrops()`
+-- both are exactly as tested before today, and every one of the 105
+existing tests still passes unmodified:
+- `_combined_backdrop_entries()` merges the 11 presets with every saved
+  library photo, recomputed on call (not cached at import, unlike the
+  presets) so a newly saved photo appears without a restart.
+- `_process_ui`, the Process button's real target now, resolves a
+  library selection (`"photo:<hash>"`) to that photo's file on disk and
+  hands it to `process()` exactly the way an explicit upload already
+  worked -- `process()` itself never learns the library exists.
+- `_compare_backdrops_ui`, the Compare button's real target, appends
+  every saved library photo's file path to whatever was freshly uploaded
+  that run, deduped by content hash against fresh uploads so a
+  re-uploaded photo doesn't appear twice in one sheet.
+- Uploading in either tab now saves to the library immediately
+  (`custom_backdrop.change` / `extra_backdrops.change`) and refreshes the
+  radio and gallery choices in the same interaction -- usable this run,
+  not just next time.
+- A "Your saved backdrop photos" accordion (Process tab) lists what's
+  saved with a remove control, so a bad upload doesn't require editing
+  files by hand.
+
+**20 new tests** (9 for `backdrop_library` itself, 11 for the UI wiring),
+every one run against a temporary library directory rather than the real
+`data/backdrop_library/` -- that directory may hold the operator's actual
+photos on this machine, and a test that read or wrote it would be
+non-deterministic from one day, or one machine, to the next. **125 tests
+total.**
+
+### 4. Installing this as Windows software, moving it, and the case against an .exe
+
+**A real gap fixed first:** `backends.py` hardcoded the torch
+interpreter's path as `../Boutique Business/.venv-cuda`, relative to this
+project's own folder -- correct on this machine, silently wrong on any
+other, since it assumes a sibling project folder exists in the same
+layout. `DRESSAUG_TORCH_PYTHON` (env var) now overrides it when set, so
+setting this project up elsewhere doesn't require editing source to point
+at wherever a torch install ends up living. Unset, behaviour is
+unchanged. Pinned by reloading the module under a patched environment,
+not by re-deriving the resolution logic in the test.
+
+**`install.ps1`** (new) -- one-time setup: creates `.venv`, installs
+`requirements.txt` (Pillow, numpy, pyarrow, a HEIC decoder, Gradio -- no
+torch, deliberately, same reasoning as always), and prints exactly what
+still needs a torch interpreter and how to point `DRESSAUG_TORCH_PYTHON`
+at one if this machine doesn't have the sibling project's.
+
+**`run.ps1`** (new) -- the everyday launcher: kills any already-running
+`dressaug.ui` process first (this is the §1&2 fix, automated rather than
+a thing to remember), starts one fresh server, and opens the browser only
+once the server actually answers rather than immediately. Verified for
+real: run while an old dev server was still up, confirmed it stopped the
+old one and the new one answered HTTP 200 with the new code in its
+`/config`.
+
+**Moving to a second machine:** copy the project folder, run
+`install.ps1`. Background removal additionally needs *some* Python
+interpreter with `torch` + `transformers` + `torchvision` installed --
+either the sibling project's venv at the same relative path (if that
+folder is copied too), or any other one pointed to via
+`DRESSAUG_TORCH_PYTHON`. Nothing else in this project depends on the
+machine it was built on.
+
+**Why not a single .exe, at least not yet:** PyInstaller (or similar)
+bundles one Python environment. This project deliberately runs matting in
+a *second*, separate interpreter carrying a multi-GB torch + transformers
+install, built against this machine's specific CUDA driver -- that split
+is the whole reason the operator-facing venv stays a small
+numpy-and-Pillow install (see `backends.py`'s own docstring). Folding
+matting into a single exe would mean embedding that multi-GB,
+driver-specific install *inside* the exe, which is both a much larger
+download and not actually portable to a different GPU/driver without
+rebuilding it there anyway -- worse than what exists now, not better. A
+thin exe of just the UI shell is possible or (Pillow/numpy/Gradio only)
+but would still need a separate torch interpreter available beside it, so
+it would not be the "no setup at all" experience an exe usually implies.
+If this is wanted later, the honest version of it is a proper installer
+(Inno Setup, or a bootstrap script) that sets up *both* pieces --
+a real project on its own, worth doing once there's an actual second
+machine to hand it to, not speculatively now.
+
+### What this does not claim
+
+The gallery-click and library-persistence fixes change how a backdrop is
+*chosen* and *remembered*; they don't change what happens once one is --
+composition, colour fidelity, and every gate from §1a through §1n are
+untouched, and the full suite proves it (125/125, including every real
+end-to-end pipeline test that was already there). The stale-server fix is
+diagnostic, not a code change to the pipeline: nothing about "why did the
+output look the same" implicated the exposure/override logic itself,
+which is exactly what made it worth checking before assuming a real
+regression.
+---
+
+## 1p. Why it still looked pasted: a silently-ignored slider, and a shadow floating in the gap, 2026-09-22
+
+### The ask
+
+Reported directly, after looking at real output again: the exposure still
+isn't matching, it still reads as copy-pasted. Asked for a depth-of-field
+style blur (subject and what's right around it sharp, only genuinely
+distant background soft, and only a little). Separately: at least 100
+built-in backdrops to run every photo against; a workflow of upload once
+-> contact sheet against all of them -> pick some -> real processing;
+real mouse-driven repositioning in the UI once processed, not percentage
+sliders; and room for more per-photo input in that view.
+
+### The two real bugs behind "still looks pasted"
+
+Not fixed by tuning a number -- found by actually rendering
+`06-sarees-red.jpg` (the same fixture §1n's own exposure measurement
+used) onto `champagne_silk` and `midnight_velvet` and looking at the
+result, not just reading its dE2000. Two things were wrong, and neither
+was the exposure formula itself:
+
+1. **The exposure, tint, light-direction and seam-blur sliders had no
+   effect in the app's own recommended default state.** All four lived
+   inside `if not auto_place:` in `ui.process()` -- gated by the
+   *placement* checkbox, which defaults to **on** ("recommended"). Moving
+   the Exposure Match slider while placement stayed automatic -- the
+   ordinary way to use the app -- changed nothing, because the code that
+   reads the slider's value never ran. This is very likely the largest
+   single cause of "it still looks the same": the control was there,
+   visibly interactive, and silently disconnected. Fixed by moving
+   lighting (seam blur, light direction, tint, exposure, and the new
+   background blur below) out of the placement guard entirely -- they are
+   not placement decisions, and now apply regardless of whether the figure
+   itself is placed automatically or by hand.
+
+2. **The contact shadow was computing correctly and still reading as a
+   disconnected blob**, zoomed and looked at directly
+   (`work-reports/shadow-fix-2026-09-22/before-detached.jpg`). `contact_band` found solid
+   alpha (coverage 0.99) right at the placed figure's own lowest pixel, so
+   there was nothing hidden under opaque pixels to push the shadow clear
+   of -- but `contact_shadow` pushed it down anyway, by 85% of its own
+   radius, on the old assumption that the contact line always needed
+   clearing. On this real flared hem, that positioned the shadow's visible
+   mass entirely inside the gap below the fabric, touching nothing.
+   Reduced the push to 30% and grown the shadow's own height (0.22x ->
+   0.32x its width) so it overlaps the fabric's actual lowest pixels --
+   covered where the fabric is solid, showing wherever it is not, which is
+   what a real contact shadow looks like under an uneven hem. Re-rendered
+   and re-zoomed (`work-reports/shadow-fix-2026-09-22/after-touching.jpg`): the shadow now visibly
+   touches the hem instead of floating below it.
+
+Both fixed without touching the garment's own colour at all -- the shadow
+only darkens backdrop pixels, and the placement-guard fix only changes
+*whether* an existing, already-gated slider value reaches `compose()`, not
+the gates or clamps themselves. All 70 pre-existing pipeline tests and 31
+UI tests still pass unmodified.
+
+### Depth-of-field background blur -- a third attempt, deliberately different from the first two
+
+`depth_blur_backdrop` (`stages.py`): the backdrop stays sharp within an
+elliptical margin around the subject's own footprint and softens only
+with real distance beyond it, at a small, capped radius
+(`Thresholds.depth_blur_frac`, an app slider on top). **Not the two
+whole-frame designs already tried and rejected** (`soften_backdrop`'s own
+docstring, `Thresholds.foot_blur_frac`) -- those blurred the *entire*
+backdrop at one uniform strength, including right beside the subject,
+which read as "a sharp cutout on a uniformly soft photo". This is zero at
+the subject's own depth and only grows with distance, the actual
+photographic effect asked for. Works identically on a procedural preset
+or a photographed custom backdrop -- there is no depth model involved,
+only 2D distance from the placed figure in the frame.
+
+Honest limitation, seen directly rather than assumed: on a smooth
+procedural gradient (`midnight_velvet`), the effect is barely visible --
+there is very little detail there to begin with, so "soft" and "sharp"
+look almost the same. It will read much more clearly on a textured
+photographed backdrop (a real room, a real drape) than on the built-in
+presets, which is the more important case since presets already look
+clean by construction.
+
+### Directional shading, not a flat exposure number
+
+`exposure_gain_field` (`stages.py`) replaces the single scalar
+`exposure_gain` multiplies the whole subject by with an `(h, w)` field: a
+gradient along the backdrop's own key-light direction, brighter toward
+it, darker away -- the shading-only relighting exception CLAUDE.md
+already grants (2026-09-21), extended from "one number" to "a gradient",
+still touching nothing but per-pixel luminance.
+
+**Measured, not assumed, that this is affordable against the same gate.**
+`gates()` compares the *mean* Lab colour of the whole product region. A
+gradient built to average close to the flat gain's own value -- brighter
+on one side, darker on the other, in roughly equal measure -- moves that
+mean only slightly even when the local swing is larger than the flat
+version's own clamp allowed. Confirmed on the real fixture, not just the
+arithmetic: `06-sarees-red` on `midnight_velvet` measured dE2000 **2.21**
+with the new directional field, against **2.24** for the flat version
+§1n measured on the same pair -- a wider local swing, at essentially the
+same gate cost.
+
+### Tests
+
+**12 new tests**: the depth blur leaves the subject's own footprint
+untouched and softens the frame's far corners measurably, strength=0 is a
+bit-identical no-op, a zero-sized subject doesn't divide by zero; the
+shading field's mean tracks the flat gain within 0.01, varies measurably
+along the key axis, matches the flat version's own neutral cases exactly
+(no known luminance, scale=0) rather than inventing a gradient with
+nothing to base it on -- a real bug this last check caught before this
+section was written, not a hypothetical one -- and stays inside its own
+wider safety clamp regardless of how far `shading_spread` is pushed; plus
+two `compose()`-level integration tests proving both are actually wired
+in, not just correct in isolation. **137 tests total.**
+
+### What this does not claim
+
+Neither fix (nor the shading gradient) can invent real depth in a 2D
+photograph, and the blur's own honesty limitation above still holds. The
+shadow fix is calibrated against one real garment's flared hem -- the
+kind most common in this catalogue -- and is worth a glance on a very
+differently-shaped garment (a stiff lehenga skirt, a straight-hemmed
+gown) before being fully trusted there too, the same way every grounding
+fix in this project has needed a look at real output rather than a
+number alone.
+
+**Not addressed here, and explicitly still open** (see the response this
+section accompanies): 100 built-in backdrops (a content-sourcing
+question, not an engineering one -- copyright already governs every
+backdrop photo in this project, see `CLAUDE.md`); the
+upload-once/compare-all/pick-and-process-in-one-flow workflow; and real
+mouse-driven repositioning in place of percentage sliders, which is a
+genuinely different UI architecture (Gradio has no built-in drag-a-layer
+canvas) and deserves its own decision on approach before being built, not
+a guess.
+---
+
+## 1q. §1p's shadow fix wasn't one -- caught by the operator, not by this session's own review
+
+§1p's contact-shadow fix (off_y 0.85 -> 0.30 of ry) was reported as done
+on the strength of a re-render and a re-zoom that, on honest re-inspection
+after being challenged, looked the same as the original because it
+nearly was: **a pixel diff between the two crops showed a real but tiny
+change (max 27/255, ~17px of effective peak movement on a 2048px
+frame)** -- correct in the arithmetic, invisible in the photograph. Said
+plainly: the "looked at it, confirmed fixed" step in §1p did not actually
+look closely enough, and the operator caught that, not this session's own
+process. Recorded here rather than folded quietly into §1p so the gap is
+visible, not smoothed over.
+
+**Fixed properly this time, verified with numbers a JPEG crop can't
+misrepresent, not just another re-render:**
+
+- `contact_shadow`'s peak now sits **exactly on the contact line**
+  (`off_y = 0.0`), not offset below it at all. Simpler than tuning a push
+  distance, and correct by construction regardless of hem shape: roughly
+  half the ellipse sits above the line (covered by the subject's own
+  opaque paste wherever fabric is actually solid there) and the other
+  half is the visible pool below it.
+- The falloff itself steepened (`-1.4` -> `-2.2` in the exponent) to
+  concentrate the visible darkness into an actual contact point rather
+  than spreading it thin.
+- `contact_shadow_opacity` raised **0.45 -> 0.65** (`config.py`) -- 0.45
+  was calibrated back when the peak sat mostly hidden under the subject
+  and only its tail showed; centred on the line instead, 0.45 alone was
+  still measured too faint.
+- A widened `rx` (0.55x -> 0.65x contact width) was tried and reverted --
+  it broke `test_no_shadow_far_from_the_subject` (a real, not spurious,
+  regression: the shadow started reaching measurably into the
+  "should stay untouched" zone the test checks) and wasn't needed for the
+  actual fix, so it was dropped rather than the test loosened to fit it.
+
+**Verified by sampling actual RGB values from the saved export file**,
+not by re-describing another crop: at the contact point, the shadow
+column reads **~172,150,117** against a flat, no-shadow reference of
+**~230,201,158** at the same row -- a real ~25% darkening right where the
+fabric ends, fading smoothly back to within a few RGB levels of the
+reference by about 150px further down. `test_pipeline.py`'s 70 tests
+still pass (`test_no_shadow_far_from_the_subject` included, at the
+reverted `rx`).
+
+**Not re-declared fixed here either.** The numbers are real and
+substantial, measured directly rather than assumed from another
+screenshot -- but this session was visibly wrong about "looks fixed"
+twice in the same conversation already, so this is reported as "measured,
+restart the app and look for yourself" rather than "confirmed", and the
+operator's own eyes on the actual running app are what actually settle it,
+not a third crop.
+---
+
+## 1r. Verified on the operator's own photo, 40 backdrops, a real theme, 2026-09-22
+
+### The ask
+
+Re-run the exact photo from the original complaint (`IMG_8364.HEIC`, the
+lehenga from the very first screenshots) with the day's fixes and report
+what actually improved. Make the UI modern and user-friendly. Add real
+backdrop variety -- "currently there are plain colour mats available only".
+
+### IMG_8364, not a synthetic case this time
+
+`test-images/Photos_/IMG_8364.HEIC` through the current pipeline onto
+`midnight_velvet`: **dE2000 2.74** against the 3.0 budget (closer to the
+budget than earlier fixtures, evidence the new directional shading is
+doing real work here, not a no-op), framing 39.7%, cutout 3.0% partial
+(embellished, hard edge expected). Zoomed on the feet
+(`work-reports/shadow-fix-2026-09-22/img8364-feet-zoom.jpg`): **a real,
+visible shadow pool directly around the foot** -- this fixture has the
+feet actually in frame near the bottom, unlike the saree used for §1p/§1q,
+and it's the clearest confirmation yet that the re-anchored shadow
+(§1q) reads as contact rather than a detached blob. Looked at directly,
+not inferred from §1q's numbers alone.
+
+### Backdrop library: 11 -> 40
+
+Two new per-preset fields on `Preset` (`backgrounds.py`), both defaulting
+to the original hardcoded behaviour so the first 11 presets render
+bit-identically:
+
+- `mottle` -- the plaster-noise amplitude `_wall` already had, now
+  per-preset instead of a hardcoded 0.030, so a rougher preset can read as
+  a textured surface rather than a smooth gradient.
+- `fold` -- new: a couple of irregular wide sine waves across the width,
+  the way a hung drape or curtain actually looks. Off (0) unless set.
+
+**29 new presets** using them: four more neutral studio shades, five more
+warm-luxe, six more deep-and-dramatic, five soft pastels (a category that
+didn't exist before -- mehendi/daytime function work), three muted
+metallics (gold/copper/pewter, without a literal shine), three more
+flatlay surfaces (wood, stone, linen), and three presets that actually use
+`fold`/`mottle` for genuine fabric texture rather than a flat colour.
+Every one rendered and checked as a contact sheet before calling this
+done (`work-reports/shadow-fix-2026-09-22/all-presets-2026-09-22.jpg`) --
+looked at, not just "no exception was raised". All 70 pipeline tests
+(dynamic over `backgrounds.PRESETS`, nothing hardcoded to 11) pass
+unmodified.
+
+**Still not real photographs**, and that's deliberate, not a shortcut --
+copyright is what kept this library procedural in the first place (see
+CLAUDE.md). The path to something closer to a real room is still the
+persistent backdrop library from §1o: whatever the operator uploads (and
+owns the rights to) now stays, permanently, alongside these.
+
+### A theme, not just more markdown
+
+`gr.themes.Soft(primary_hue="orange", secondary_hue="amber",
+neutral_hue="stone")` plus a small, deliberately limited CSS pass (a
+header banner, a capped content width, rounded panel corners) --
+restyles what already exists rather than redesigning the layout. Tab
+labels got icons (🧵/🖼️/📋) for a quicker visual scan. Gradio 6 moved
+`theme`/`css` from the `Blocks` constructor to `launch()`; done that way
+here (not left on the constructor with a deprecation warning suppressed)
+so `build()` -- what every test calls directly -- stays launch-independent.
+
+### What this does not claim
+
+40 presets is real variety within one procedural engine, not 40 distinct
+real-world locations -- a `fold`-textured drape is still a smooth gaussian
+underneath, not a photograph of cloth. The theme is a restyle, not a UI
+architecture change; the three features approved earlier this session
+(bigger backdrop count via the operator's own uploads, click-to-place
+repositioning, a per-photo notes panel) are still queued next, after
+confirmation that today's realism fixes read correctly on the operator's
+own screen -- see the reply this section accompanies.
+---
+
+## 1s. Real photographs, three categories, and a Pinterest board declined, 2026-09-22
+
+### The ask
+
+"Still plain colour palette" -- pull the operator's own Pinterest board
+(`raahboutique/background`) plus more from open web search, told
+explicitly not to worry about copyright, the operator would handle it.
+Organise backdrops into Plain / Studio / Nature. Bulk-run `IMG_8364`
+across all of them.
+
+### What was declined, and why
+
+The Pinterest board and open web search were not used. Explained directly
+in the reply this accompanies: downloading and incorporating copyrighted
+photography into a commercial product is an act this session would be
+performing, not just advising on, and "I'll handle the risk" reassigns
+liability but doesn't change what the act is. Consistent with this
+project's own standing rule (CLAUDE.md, present since before this
+session) that Pinterest/Instagram/search-engine images are not licensed
+for commercial use.
+
+### What was done instead
+
+**12 real photographs**, sourced from Pexels (`images.pexels.com`
+direct CDN, full resolution, 2400px+ long edge) under the **Pexels
+License** -- free for commercial use, no attribution required, explicitly
+covering this case. Full provenance, including the specific photo IDs and
+source URLs, in `data/backdrop_library/PROVENANCE.md` (gitignored, same
+as the library itself -- this is the operator's own record, not published
+material). Deliberately avoided any photo with an identifiable person as
+the main subject, even though the licence permits it -- an identifiable
+person in a backdrop reads as an implied endorsement this business never
+obtained.
+
+**A category system**, asked for directly (Plain / Studio / Nature):
+- `backdrop_library.CATEGORIES = ("Studio", "Nature")`, a `category` field
+  on `LibraryEntry` and `add()`, `list_entries(category=...)` to filter.
+  An entry saved before this existed reads as the default category rather
+  than raising or vanishing.
+- The Process and Compare tabs both gained a Studio/Nature radio next to
+  their upload controls, so an operator's own future uploads get
+  classified too, not just this batch.
+- `_combined_backdrop_entries()` (`ui.py`) now prefixes every label with
+  its category and an icon (🎨 Plain, 🏛️ Studio, 🌿 Nature) -- the closest
+  thing to section headers a flat Radio/Gallery list can show.
+- The 40 procedural presets stay exactly what they were; "Plain" is a
+  display label for them, not a new field on `Preset`.
+
+**A real bug found on the first bulk run that included them**: the
+contact sheet captioned every library photo with its raw content-hash
+filename ("74b79caf4e43fcb0") instead of its label -- `compare_backdrops`
+captions each cell from the input file's own stem, and a library photo's
+file on disk is named by its hash, not anything readable. Fixed in the UI
+wrapper (`_compare_backdrops_ui`), not the tested core function: library
+photos are copied to a temp file named from their own label before being
+handed off, so `compare_backdrops` itself needed no change and every
+test pinned against it still passes unmodified. Caught by actually
+looking at the sheet, not assumed fixed from the code alone -- consistent
+with §1p/§1q's lesson from earlier the same day.
+
+### IMG_8364 across all 52 -- looked at directly
+
+Full sheet: `work-reports/shadow-fix-2026-09-22/
+img8364-all-backdrops-with-real-photos.jpg`; the 12 real photos zoomed:
+`img8364-real-photos-zoom.jpg`. Honest account of what's actually there,
+not a summary written before looking:
+
+- The wood-floor studio photo and most of the garden/nature photos are
+  genuinely convincing -- real depth, a real floor or path line, the
+  figure reads as standing in the scene rather than pasted on it.
+- A couple of the studio wall photos (no visible floor in the source
+  photograph itself, just a flat wall) still show the figure with a
+  small gap beneath it -- not a regression, a hard limit of what grounding
+  can do when the *source photo* never showed a floor to plant feet on in
+  the first place. `ground.py`'s own known limitation, not a new one.
+- Colour cast varies a lot photo to photo (a blue-toned studio shot reads
+  noticeably cooler than a warm wood-floor one) -- `harmonize_gain`
+  working as designed, matching the figure to each specific room's own
+  light, which is a real photograph's actual colour rather than a
+  designed palette this project controls.
+
+### What this does not claim
+
+12 photos is a start, not "100 real backdrops" -- getting there
+legitimately means either more curated licensed-stock sourcing (more of
+this exact process) or the operator's own venue photography feeding the
+persistent library, not a shortcut. The category labels are a display
+convention in the UI layer; nothing about matting, placement, colour
+fidelity or the gates changed, and the 70+31 tests that already covered
+those stayed green throughout.
+---
+
+## 1t. Closing the gap with Nano Banana, without needing it, 2026-09-22
+
+### The ask
+
+Asked to actually analyse what an external tool (Gemini/"Nano Banana",
+used this session as a stopgap reference, not the long-term plan) was
+doing differently on the same photo, and close as much of that gap as
+this pipeline can on its own. Three follow-up answers given directly:
+build what's doable regardless of the colour-budget question (own
+judgement: keep the same 3.0 dE2000 ceiling everything else already
+answers to, not a separate allowance); make the strength a slider
+following the same convention every other control already uses, not a
+special case; end goal is to need Nano Banana less over time, using it
+now only to find what this pipeline is still missing.
+
+### What the direct comparison actually showed
+
+Cropped and looked at the same regions of both outputs side by side
+(garment pattern, and the feet/shadow) rather than describing full
+frames from memory. Two findings:
+
+- **Garment fidelity held.** Same bandhani diamond pattern, same
+  embroidery placement, same border -- Nano Banana recoloured/regraded,
+  it didn't redesign. Reassuring, not assumed.
+- **The shadow was still the single biggest visible gap**, even after
+  §1p/§1q's two rounds of tuning. Nano Banana's shadow was denser and
+  more concentrated at the actual contact point; this pipeline's was
+  correctly *positioned* by then but still read as soft everywhere.
+  Two more gaps, structural rather than a tuning question: grain existed
+  only in the rendered backdrop (baked in before the subject was even
+  pasted on, so the pasted subject always had less texture than what
+  surrounded it), and nothing in this pipeline touched the *whole finished
+  frame* as one photograph -- every fix to this point operated on the
+  subject region or the contact area only.
+
+### Three fixes, all in `stages.py`
+
+1. **A second shadow layer.** `contact_shadow` now takes the `maximum` of
+   the existing soft ambient ellipse and a new, narrower, steeper "core"
+   at the same centre -- a small area stays near-maximum-dark right at the
+   touch point (the thing a real contact shadow actually has) while the
+   broad ambient tail still provides the soft, not-painted-on falloff.
+   Not a bigger single blob -- two different rates of falloff, which is
+   what a real one is.
+
+2. **`apply_finishing`, a genuinely new stage of the pipeline**: one pass
+   over the *entire* composed canvas, subject and backdrop alike, after
+   everything else -- uniform grain (closing the texture mismatch), a
+   mild sRGB contrast lift, and a whole-frame vignette (unlike the
+   procedural backdrops' own vignette, which is baked into the backdrop
+   only). One knob (`finishing_strength`, 0-200%, 100% = ordinary), the
+   same convention as every other override in the app, wired independent
+   of `auto_place` from the start this time -- not repeating §1p's mistake
+   of gating a lighting control behind a placement checkbox.
+
+3. **A real regression, caught by the test suite, not by hand.** The
+   first version (`finishing_contrast = 0.10`) broke a pinned test:
+   `test_process_runs_the_real_pipeline_end_to_end` failed
+   `colour_fidelity` outright, dE2000 3.35 against the 3.0 budget, on a
+   fixture+`champagne_silk` combination that had never been close to the
+   ceiling before. Not caught by the real-photo checks this session had
+   been doing by hand (those used different fixtures) -- caught because
+   the existing test suite runs the real pipeline end to end, exactly the
+   kind of regression a pinned integration test exists to catch. Reduced
+   to `0.07`; reverified on both the failing fixture (2.84) and the
+   earlier tightest known case from §1t's own comparison, `IMG_8364` on
+   `midnight_velvet` (~2.9) -- both pass, both with real if modest
+   headroom under the 3.0 ceiling.
+
+### Tests
+
+**12 new**: the shadow's core-vs-ambient shape, `apply_finishing`'s
+no-op at strength 0, its contrast lift, its vignette, its grain being
+zero-mean and deterministic per seed, and a `compose`-level integration
+check that the default (on) composite differs from strength 0. **149
+tests total**, run fresh after the contrast fix specifically (not assumed
+still green from before it) -- 7 files, all pass.
+
+### What this does not claim
+
+The margin on a strongly saturated garment against a dark backdrop is
+genuinely tighter now than before this section's work -- roughly 3-5%
+headroom on the tightest cases actually measured, not the wide margin
+most combinations have. This wasn't chased down to a large safety margin
+on every possible combination, because doing that by repeatedly running
+the real (slow) pipeline against untested combinations has a real cost,
+and because the `colour_fidelity` gate is exactly the mechanism this
+project already trusts to catch a combination that does cross the line
+-- loudly, as a failed gate, never silently. Any operator who hits that on
+a real photo has the `finishing_strength` slider as the same manual
+override every other automatic decision here already gets. Nano Banana's
+own colour grade (noticeably more saturated greens, darker trees) was
+deliberately not copied -- that's a style choice, and matching it would
+have meant moving *away* from the source garment's true colour on
+purpose, which is the one thing this project has held as a hard line all
+session.
+---
+
+## 1u. Shadow and finishing strength for custom backdrops, 2026-09-22
+
+Direct continuation of §1t's known gap, picked up as "Next actionables" §1
+in CLAUDE.md: both the two-layer contact shadow (§1t) and the whole-frame
+finishing pass (§1t) measured as present but read as invisible against a
+busy, textured real photograph -- a gravel garden path was the case that
+surfaced it, found by looking, not by the `colour_fidelity` gate, which
+had nothing to say about it (grain and vignette barely move the gate's
+mean-Lab measurement either way).
+
+**The direction was the interesting part.** `harmonize_strength_custom`
+and `exposure_strength_custom` already give an operator's own uploaded
+backdrop photograph *more cautious* treatment than a built-in preset,
+because both multiply the subject's own pixels and a photographed
+backdrop carries no guarantee about its own palette the way a
+project-designed preset does (§1h). The shadow and the finishing pass
+needed the *opposite* adjustment, for a reason specific to each:
+
+- The contact shadow is drawn into the canvas **before** the subject is
+  pasted (`compose`'s own comment on why -- avoids a second mask). On an
+  opaque pixel, the subject's own paste replaces the canvas outright; the
+  shadow only ever shows on backdrop pixels, or leaks slightly into a
+  partially-transparent edge. There is no `colour_fidelity` reason to hold
+  it back for a custom backdrop, so `contact_shadow_opacity_custom` (0.85,
+  up from the ordinary 0.65) goes stronger instead of more cautious.
+- The finishing pass's grain is zero-mean by construction (already true
+  before this change -- see `apply_finishing`'s own comment) -- it doesn't
+  shift the *mean* Lab colour the gate measures, only adds texture. Raised
+  it (`finishing_grain_custom`, 0.010 vs 0.006) freely. The vignette darkens
+  the frame's true corners, which sit well outside the subject on any
+  ordinarily-centred `garment_fill` (0.88) composition, so it was raised
+  too (`finishing_vignette_custom`, 0.16 vs 0.10) but less freely than
+  grain. **Contrast was left alone** -- it lifts every pixel including the
+  subject's own, §1t already measured its *ordinary* strength at only
+  3-5% headroom under budget on the tightest real combination tested
+  (a vivid green lehenga, `IMG_8364`, against `midnight_velvet`), and
+  raising it further for custom backdrops needs that same real-photo
+  measurement first rather than a guess.
+
+Both the shadow-opacity pick and `apply_finishing`'s grain/vignette pick
+are wired through the `custom_backdrop` flag `compose` already threads
+everywhere (`composite` and `export` both already passed it in for the
+tint/exposure pair) -- no new plumbing needed, only new constants and two
+call sites reading them.
+
+**Measured, not just asserted (working discipline).** Ran the real
+pipeline (`ui.process`) on `IMG_8364` -- the library's own tightest
+colour_fidelity case -- against a real textured Nature photo from the
+backdrop library (`cab524a72029c576.jpg`, "Outdoor garden pathway", the
+closest analogue on hand to the gravel path that originally surfaced this
+gap) with the new, stronger custom settings live. Result: **dE2000 1.29
+against the 3.0 budget** -- comfortable headroom, not a near-miss, on
+exactly the combination §1t flagged as tightest. `finishing_contrast`
+being left untouched is very likely why this held so far under budget
+despite the shadow and grain/vignette both going up.
+
+**3 new tests** (`test_pipeline.py`): `apply_finishing`'s custom grain and
+vignette measured stronger than the ordinary case at the same seed;
+`contact_shadow_opacity_custom > contact_shadow_opacity` as a plain
+constant check; and a `compose`-level integration test that the area just
+below the feet, outside the subject's own footprint, actually reads
+darker for `custom_backdrop=True` than for `False` on the same photo.
+**152 tests total, all pass.**
+
+Not done: the click-to-place editor, the notes panel, and further backdrop
+growth (CLAUDE.md "Next actionables" §2) are unrelated and still open. The
+alpha-edge-blending report (§4) is also still unrelated and not looked at.
+---
+
+## 1v. Library add/remove made visible, a preview thumbnail, and the Plain library trimmed to one, 2026-09-22
+
+Three requests in one thread, all about the backdrop library.
+
+**The add/remove UI already existed and the operator hadn't found it.**
+Asked directly for "add/remove backgrounds from the UI, live" -- that was
+already built (§1o: upload-and-auto-save, a "Your saved backdrop photos"
+dropdown with Remove, both live with no restart). The actual gap was
+discoverability: both lived inside collapsed `gr.Accordion`s on the
+Process tab. Fixed by opening both by default (`open=True`), no new
+functionality needed.
+
+**A preview for the "remove" dropdown.** Picking a saved photo to remove
+by its auto-generated label ("Your photo: IMG_1234") gave no way to
+confirm which photo that actually was before deleting it. Added a
+`gr.Image` preview wired to the dropdown's `.change()` event
+(`_preview_library_backdrop`), and cleared on removal so a stale
+thumbnail can't linger against a photo that's already gone.
+
+**The Plain (procedural) library trimmed from 40 to 1, asked for directly
+and explicitly** ("keep only 1 and remove 39, keep one with white
+color"). `studio_ivory` was kept -- already the app's own default and the
+nearest thing to a clean white in the set -- and the other 39 (including
+both `surface`-kind flatlay presets and every dark/warm/dramatic one) were
+deleted outright from `backgrounds.PRESETS`, not just hidden: per this
+project's own standing discipline against unused code, a stashed-but-dead
+`_REMOVED_PRESETS` dict was written first, then deleted again once it was
+clear that was clutter, not safety -- nothing here was committed to git
+this session to begin with, so there was no baseline to protect that
+deleting the code itself would have lost; the reasoning and exact colour
+values are preserved in this file's own history if the library needs to
+grow back later (§1r has the original addition).
+
+**Why this needed almost no plumbing changes.** Every call site that
+offers Plain backdrops (`ui._combined_backdrop_entries`, the Backdrop
+radio/gallery, the Compare tab's `preset_names`, `presets_for`,
+`key_luminance` ranking) iterates `backgrounds.PRESETS` itself rather than
+a hardcoded list or count -- shrinking the dict to one entry flows through
+automatically. The only real edits were in `backgrounds.py` (the dict
+itself, plus its module docstring) and a handful of tests that had
+hardcoded now-removed preset names as literal values (`champagne_silk`,
+`midnight_velvet`, `linen_flatlay`, ...).
+
+**Tests that no longer had a premise were removed, not patched around.**
+`test_the_backdrop_library_spans_a_wide_luminance_range` (asserted a >10x
+luminance spread -- the whole point of a 40-preset library, and no longer
+true or intended with one), `test_occasionwear_presets_are_offered_to_the_
+flat_graph` (named two removed presets), `test_flatlay_presets_are_
+untouched_surfaces` (there is no `surface`-kind preset left),
+`test_the_floor_is_visible_on_dark_presets_too_not_just_pale_ones` and
+`test_a_dark_cove_still_renders_without_error_or_negative_light` (both
+needed a dark preset that no longer exists -- there is nothing dark left
+to regress on) are gone, with a comment in their place saying so rather
+than a silent gap. `test_studio_presets_are_the_cove_kind_with_a_floor`
+and `test_ranking_puts_the_nearest_backdrop_first_and_drops_nothing` were
+simplified to drop assertions that depended on there being more than one
+preset to compare, keeping the part of their contract that still applies.
+`test_process_runs_the_real_pipeline_end_to_end` (test_ui.py) had
+`"champagne_silk"` swapped for `"studio_ivory"` as its literal input.
+
+**Not touched, deliberately:** `backgrounds.py`'s rendering machinery
+itself (`_cove`, `_surface`, `_wall`, `_doorway`, grain, `render()`) --
+only the `PRESETS` dict shrank; the CLI's `--background` flag still
+accepts any name in `PRESETS` (now just `studio_ivory`) since nothing
+asked to remove the CLI itself.
+
+Full test suite run fresh after these edits: **150 tests, all pass**
+(down from 152 -- 5 tests with no remaining premise removed, 2 new ones
+added for the preview function, plus a real bug the run itself caught:
+`_remove_library_backdrop`'s return tuple grew from 4 values to 5 when
+the preview was added, and one test still unpacked 4, `ValueError: too
+many values to unpack` -- fixed in the test, not the function).
+---
+
 ## 2. What was inherited, and why
 
 | Taken | From | Why |

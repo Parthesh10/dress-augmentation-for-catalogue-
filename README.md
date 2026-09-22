@@ -13,6 +13,10 @@ This is the second pipeline in `Business 1/`. The first,
 silk-thread jewellery. Its architecture is inherited here deliberately, and so
 is its scar tissue — see [TASK.md §2](TASK.md).
 
+**Setting this up on a new machine to use it (not develop it)?** Use
+[INSTALL.md](INSTALL.md) instead of this file — step-by-step, written for
+someone who's never touched the codebase.
+
 ---
 
 ## Status
@@ -20,7 +24,7 @@ is its scar tissue — see [TASK.md §2](TASK.md).
 | Phase | State |
 |---|---|
 | **1 — Background removal** | **Built, in the app.** BiRefNet matting, soft alpha kept unthresholded |
-| **2 — Relevant background** | **Built, in the app.** 11 procedural backdrops, occasionwear palette |
+| **2 — Relevant background** | **Built, in the app.** 1 plain preset + your own saved photo library |
 | 3 — Recolour without changing design | Not started |
 | 4 — Shaded / multi-tone colours | Not started |
 | 5 — Design edits by prompt | Not started. First phase needing a generative model |
@@ -41,18 +45,36 @@ dominated by process/model-load overhead (~80-90s either way for a single
 photo) -- the GPU's win compounds across a batch, not a single image. See
 [TASK.md §1i](TASK.md).
 
-**105 tests, one command:** `.venv\Scripts\python.exe tests\run_all.py`
+**150 tests, one command:** `.venv\Scripts\python.exe tests\run_all.py`
 
 ---
 
 ## The app
 
 ```powershell
-$env:PYTHONPATH="src"
-.venv\Scripts\python.exe -m dressaug.ui
+.\run.ps1
 ```
 
-Opens at `http://127.0.0.1:7860`. Upload a photograph, choose garment type, fabric, a backdrop (by name or by eye), and export sizes; click Process. Recolour is shown, disabled, labelled "coming soon" -- not built yet, and not hidden either.
+First time on this machine, or a fresh checkout: `.\install.ps1` first (creates
+`.venv`, installs everything except torch -- see its own printed output for
+why, and what background removal still needs). `run.ps1` stops any
+already-running Dress Studio server before starting a new one -- a stale
+server left over from an earlier session, still answering on the same port
+with old code loaded, is a real way this app has looked "unfixed" after a
+real fix (see [TASK.md §1o](TASK.md)) -- then opens `http://127.0.0.1:7860`
+once it actually answers.
+
+Upload a photograph, choose garment type, fabric, a backdrop (by name, or by
+eye in the gallery -- clicking a thumbnail now actually selects it, fixed in
+§1o), and export sizes; click Process. Recolour is shown, disabled, labelled
+"coming soon" -- not built yet, and not hidden either.
+
+**A backdrop photo you upload is saved.** Both the Process tab ("Or use your
+own backdrop photo") and the Compare tab ("Also compare against your own
+backdrop photos") save whatever you add to a small library on disk
+(`data/backdrop_library/`, gitignored) -- it's offered by name and by eye in
+every run after, across restarts, until you remove it. Before §1o this only
+ever lasted the one run it was uploaded in.
 
 **Exports land in `output/`, named after the file you uploaded** -- fixed
 2026-09-19; every export used to be named `source--<preset>.jpg` regardless
@@ -93,21 +115,24 @@ $env:PYTHONPATH="src"
 
 # one garment through phases 1 and 2
 .venv\Scripts\python.exe -m dressaug.cli --path data\fixtures\0000-flat.png `
-    --garment gown --background midnight_velvet
+    --garment gown --background studio_ivory
 
 # the test suite
 .venv\Scripts\python.exe tests\run_all.py
 ```
 
 `--garment` picks the fabric default; `--fabric` overrides it. `--background`
-takes any of the 11 presets. Backdrops suit different stock: `studio_ivory`
-and `studio_pearl` for the plain commercial shot, `champagne_silk` and
-`blush_plaster` for bridal and party, `midnight_velvet`, `wine_drape` and
-`emerald_drape` for evening gowns.
+takes any name in `backgrounds.PRESETS` -- as of 2026-09-22 (§1v) that's
+just `studio_ivory`, a plain white/neutral studio backdrop; real backdrop
+variety now comes from your own photographed backdrop library instead (see
+"A backdrop photo you upload is saved" above).
 
 **Matting needs the torch interpreter shared with the sibling project** at
 `Boutique Business/.venv-birefnet`. This project's own venv deliberately has
-no torch, so the operator machine stays a numpy-and-PIL install.
+no torch, so the operator machine stays a numpy-and-PIL install. On a
+machine that doesn't have that sibling project, set `DRESSAUG_TORCH_PYTHON`
+to any Python interpreter with torch + transformers + torchvision installed
+instead of editing source -- see [TASK.md §1o](TASK.md).
 
 ---
 
@@ -133,6 +158,130 @@ shop's own photographs** — [TASK.md §5](TASK.md) says what a useful first set
 looks like.
 
 ---
+
+## Library add/remove made visible, a removal preview, and Plain trimmed to one, 2026-09-22
+
+Three requests, one thread. The add/remove backdrop-library UI already
+existed (upload-and-auto-save, a "Your saved backdrop photos" dropdown
+with Remove, both live with no restart) — the gap was that both lived
+inside collapsed accordions on the Process tab and hadn't been found.
+Fixed by opening both by default, plus a real **preview thumbnail** on
+the removal dropdown so it's clear what's about to be deleted before
+clicking Remove.
+
+**The Plain procedural library was cut from 40 presets to 1**
+(`studio_ivory`, white/neutral), asked for directly. Real backdrop variety
+now comes from the operator's own photographed library, not the
+procedural engine. Every UI surface that offers Plain backdrops iterates
+`backgrounds.PRESETS` itself rather than a hardcoded count, so this needed
+almost no plumbing changes — the real work was in the test suite, where a
+handful of tests had hardcoded now-removed preset names or asserted a
+luminance *spread* across the library that no longer exists by design.
+Those were rewritten or removed outright, not patched around, with the
+reasoning left in place rather than silently dropped. Full account in
+[TASK.md §1v](TASK.md).
+
+## Stronger shadow and finishing on custom backdrops, 2026-09-22
+
+Direct continuation of the gap below: the two-layer contact shadow and the
+whole-frame finishing pass both measured as present but read as invisible
+against a busy, textured real photo (a gravel garden path). Fixed by going
+in the *opposite* direction from the colour-tint/exposure pair, which is
+already more cautious for an operator's own uploaded backdrop — the shadow
+only ever darkens backdrop pixels (drawn into the canvas before the
+subject is pasted), and grain is zero-mean, so neither has the
+`colour_fidelity` reason the tint/exposure pair does to hold back. Contact
+shadow opacity, finishing grain, and finishing vignette are now stronger
+by default on a custom backdrop; contrast was left alone, deliberately —
+it already had the least measured headroom under budget. Measured on the
+real pipeline (the library's own tightest colour_fidelity case, a vivid
+green lehenga, against a real textured Nature backdrop): dE2000 1.29
+against the 3.0 budget, comfortable headroom. **3 new tests, 152 total.**
+Full account in [TASK.md §1u](TASK.md).
+
+## Closing the gap with an external AI tool, without needing it, 2026-09-22
+
+Used an external tool (Gemini/"Nano Banana") as a diagnostic, not a
+destination -- ran the same photo through it and compared the actual
+crops against this pipeline's own output. Garment fidelity held on both
+(same pattern, same embroidery, it recoloured rather than redesigned),
+but its shadow was denser and more concentrated at the contact point,
+and its whole frame had a uniform grain and a mild contrast/vignette this
+pipeline never applied to anything but the subject region. Three real
+fixes: a second, narrower shadow layer under the existing one (`maximum`
+of a soft ambient ellipse and a dense core, closer to how a real contact
+shadow actually falls off); a brand-new whole-frame finishing stage
+(grain, contrast, vignette, one slider, applied to backdrop *and*
+subject alike, independent of the placement checkbox from the start);
+and a real regression caught by the existing test suite, not by hand --
+the first contrast value broke a pinned end-to-end test outright
+(dE2000 3.35 against the 3.0 budget), fixed by reducing it and
+reverifying on the actual failing case rather than a different one.
+**12 new tests, 149 total.** Full account, including the honest note
+that colour margins are now genuinely tighter on saturated-garment/dark-
+backdrop combinations, in [TASK.md §1t](TASK.md).
+
+## A silently-ignored slider, a shadow floating in the gap, and a real depth-of-field blur, 2026-09-22
+
+Reported again, after looking at real output: it still reads as
+copy-pasted. Two real bugs, not a weak formula, turned out to be why.
+**The exposure, tint, light-direction and seam-blur sliders had no effect
+in the app's own recommended default state** -- all four lived behind the
+"Place automatically" checkbox, which defaults to on, so moving the
+Exposure Match slider the ordinary way changed nothing. Fixed: lighting
+now applies regardless of whether placement is automatic or manual.
+**The contact shadow was computing correctly and still looked wrong** --
+zoomed and looked at directly, it sat as a disconnected blob in the gap
+below a real flared saree hem rather than touching it, because it was
+being pushed clear of the contact line even when nothing needed clearing.
+Re-anchored; before/after in
+`work-reports/shadow-fix-2026-09-22/`.
+
+Also new: a real **depth-of-field background blur** -- sharp at and
+around the figure, gently soft only genuinely far from it -- distinct
+from the two whole-frame blurs already tried and rejected, which blurred
+everything uniformly. And exposure matching is now a **directional
+gradient** along the key light, not one flat number, at essentially the
+same `colour_fidelity` cost as the flat version it replaces (measured:
+dE2000 2.21 vs. 2.24 on the same real photo). **12 new tests, 137
+total.** Full account in [TASK.md §1p](TASK.md).
+
+## A stale server, a decorative gallery, and a persistent backdrop library, 2026-09-22
+
+Reported after actually looking at the running app: a backdrop comparison
+looked unchanged from the day before. It was -- not a regression in the
+work below, but **stale server processes** never restarted after code
+changed, exactly the failure CLAUDE.md's own discipline had named without
+anything enforcing it. Fixed, and now automated: `run.ps1` kills any
+already-running server before starting a fresh one, and this fix was
+itself verified by fetching the live server's `/config` and confirming it
+actually contains this session's new code, not just that a server
+answered on the port.
+
+Two real UI bugs fixed alongside it, not just polish: the backdrop
+gallery's "pick by eye" never actually selected anything on click (fixed
+with a real `gallery.select()` handler), and export results showed two
+identically-captionless thumbnails per photo, which is exactly what "no
+change happened" looks like even when it worked (now captioned by preset
+and size).
+
+**Backdrop photos now persist.** Every "use your own backdrop photo"
+upload used to live only for the run it was uploaded in -- gone on the
+next run, let alone the next session, which is why the gallery kept
+showing only procedural colours no matter how many real photos had been
+sent. A new `backdrop_library.py` (content-hashed, `data/backdrop_library/`,
+gitignored) fixes that: a photo saved once is offered by name and by eye
+in every run after, in both the Process and Compare tabs, across
+restarts, until removed.
+
+Also: `install.ps1` / `run.ps1` for setting this up and running it on
+Windows, a `DRESSAUG_TORCH_PYTHON` env var so the previously-hardcoded
+sibling-project interpreter path is no longer required for moving this to
+a second machine, and the case against a single `.exe` for now (this
+project deliberately splits into two Python environments -- see
+[TASK.md §1o](TASK.md) for why bundling them into one file would make
+things worse, not better). **20 new tests, 125 total.** Full account in
+[TASK.md §1o](TASK.md).
 
 ## Exposure matching, missing overrides, and a Compare Backdrops tab, 2026-09-22
 
