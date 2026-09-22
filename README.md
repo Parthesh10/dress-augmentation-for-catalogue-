@@ -159,6 +159,19 @@ looks like.
 
 ---
 
+## 6 more real photos, and the Pinterest board declined a third time, 2026-09-22
+
+Asked directly to download from the `raahboutique/background` Pinterest
+board plus general web search — declined again, unchanged reasoning
+(re-hosted photography carries no licence information; a general web
+search result isn't verifiably licensed either). Sourced 6 more real
+photos from Pexels instead (4 Studio, 2 Nature), same vetting as the
+original 12: no identifiable person as the main subject, 3000px+
+resolution, added through the library's own `add()` so they carry a real
+manifest entry rather than a raw file drop. **Library is now 18 real
+photos.** Provenance in `data/backdrop_library/PROVENANCE.md`. Full
+account in [TASK.md §1w](TASK.md).
+
 ## Library add/remove made visible, a removal preview, and Plain trimmed to one, 2026-09-22
 
 Three requests, one thread. The add/remove backdrop-library UI already

@@ -2063,6 +2063,43 @@ the preview was added, and one test still unpacked 4, `ValueError: too
 many values to unpack` -- fixed in the test, not the function).
 ---
 
+## 1w. The Pinterest board asked for a third time, declined a third time; 6 more Pexels photos instead, 2026-09-22
+
+Directly: "download some hd backgrounds for these usecase from web... like
+from [the raahboutique/background Pinterest board]... and else." The third
+time this specific board (or an unscoped "search the web for backdrop
+images") has been asked for -- §1j/§1k first raised it as a reference,
+§1s declined it explicitly after being told not to worry about the
+copyright risk. Declined again, same reasoning, unchanged by repetition:
+Pinterest re-hosts other photographers'/brands' work without carrying
+licence information, and "and else" (general web image search) has the
+same problem for any result that isn't independently verified as
+commercially licensed -- there is no way to confirm that from a search
+result alone.
+
+Asked the operator which path they wanted instead (more Pexels, their own
+venue photography, or a stock account they already hold a licence for) --
+picked more Pexels, the same source as the original 12 (§1o). Sourced,
+vetted and added **6 more real photos** (4 Studio, 2 Nature), same rule as
+before: no identifiable person as the main subject, full resolution
+(3000px+ on the long edge), added through `backdrop_library.add()` --
+never a raw file drop into a folder the app doesn't read from -- so they
+carry a real manifest entry and content-hash key like every other library
+photo. One additional candidate (Pexels photo 32995392) was found and
+vetted but its CDN link returned "unreachable" on every URL variant tried
+and was dropped -- a dead link, not a licensing problem.
+
+**Library is now 18 real photos** (12 + 6), all recorded with their
+Pexels photo ID in `data/backdrop_library/PROVENANCE.md`. No code changed
+this round -- `backdrop_library.add()` already existed and did exactly
+what was needed. Server restarted so the new photos are pickable in the
+running app; not re-run through the full test suite since nothing in
+`src/` changed, only library content.
+
+If a Pinterest board or unscoped "search the web for images" comes up a
+fourth time: same answer, point here rather than re-explaining it fresh.
+---
+
 ## 2. What was inherited, and why
 
 | Taken | From | Why |
