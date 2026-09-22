@@ -929,11 +929,34 @@ for the reasoning behind each):
 
 #: A warm, muted theme -- matches this library's own occasionwear palette
 #: rather than Gradio's default blue, and reads as "a catalogue tool" more
-#: than "a generic ML demo". No custom `.set()` overrides: the named-hue
-#: constructor is the stable part of Gradio's theming API across versions;
-#: hand-tuned colour tokens are the part that tends to break on an upgrade.
+#: than "a generic ML demo".
+#:
+#: Two `.set()` overrides, added 2026-09-23 after a real dark-mode screenshot
+#: showed why "no overrides" wasn't actually safe: Soft's own *default* dark
+#: variant for a field label is a fully-saturated solid fill
+#: (`block_label_background_fill_dark = *primary_600`, white text) --
+#: correct per Gradio's own theme builder, but applied to *every single*
+#: label in this app it reads as a loud badge shouting on every section
+#: instead of a quiet marker, which light mode's soft pale tint
+#: (`*primary_100`) never does. This brings dark mode into the same
+#: register light mode already uses, rather than inventing a second visual
+#: language for it. Checked against the theme's own computed values
+#: (`gr.themes.Soft(...).block_label_background_fill_dark` etc.) before
+#: picking replacements, not guessed.
 _THEME = gr.themes.Soft(
     primary_hue="orange", secondary_hue="amber", neutral_hue="stone",
+).set(
+    block_label_background_fill_dark="*neutral_700",
+    block_label_text_color_dark="*primary_300",
+    block_title_background_fill_dark="*neutral_700",
+    block_title_text_color_dark="*primary_300",
+    #: A visible card edge in dark mode -- `border_color_primary_dark`
+    #: defaults to `*neutral_700`, the same value a block's own background
+    #: now uses two lines below by inheritance, which made every panel's
+    #: boundary disappear into its neighbour. `*neutral_600` is a full step
+    #: lighter, checked against both `*neutral_800` (a card) and
+    #: `*neutral_950` (the page behind it) to confirm it reads against each.
+    border_color_primary_dark="*neutral_600",
 )
 
 #: Small, deliberately limited CSS pass -- a header banner, a readable
@@ -941,15 +964,25 @@ _THEME = gr.themes.Soft(
 #: accordions and cards read as distinct surfaces. Not a redesign: every
 #: control, layout and accordion below is unchanged, this only restyles
 #: what is already there.
+#:
+#: The header banner used to be a hardcoded light cream gradient with no
+#: text colour set -- invisible in dark mode, because Gradio's dark-mode
+#: text colour is *light*, rendered on top of a background that stayed
+#: light regardless of theme. Rewritten to use Gradio's own CSS custom
+#: properties (`var(--block-background-fill)` etc., the same tokens every
+#: native panel already uses) instead of literal hex, so it inherits
+#: correct contrast in both modes automatically and can never drift out of
+#: sync with the theme again -- see `base.py`'s `_get_theme_css` in the
+#: installed gradio package for where these are generated.
 _CSS = """
 .gradio-container { max-width: 1400px !important; margin: 0 auto !important; }
 .dress-header {
     padding: 20px 26px; border-radius: 16px; margin-bottom: 14px;
-    background: linear-gradient(135deg, #FFF7ED 0%, #FDEBD0 100%);
-    border: 1px solid #F0D6A8;
+    background: var(--color-accent-soft);
+    border: 1px solid var(--border-color-accent);
 }
-.dress-header h1 { margin: 0 0 4px 0; font-size: 1.5rem; }
-.dress-header p { margin: 0; opacity: 0.78; font-size: 0.95rem; }
+.dress-header h1 { margin: 0 0 4px 0; font-size: 1.5rem; color: var(--body-text-color); }
+.dress-header p { margin: 0; font-size: 0.95rem; color: var(--body-text-color-subdued); }
 .gradio-container .block { border-radius: 12px !important; }
 """
 
