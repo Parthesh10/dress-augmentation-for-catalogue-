@@ -99,9 +99,10 @@ this isn't the machine `../Boutique Business/` lives on).
 Three tabs: **Process a dress** (the real pipeline, full-res export),
 **Compare backdrops** (contact sheet — one photo or many, against the
 single built-in Plain preset plus every real photo saved to your library;
-preview only, no export), **What's built** (status page). A warm
-`gr.themes.Soft` theme (orange/amber/stone) since 2026-09-22, not the
-Gradio default — see §1r.
+preview only, no export), **What's built** (status page). A calm blue
+`gr.themes.Soft` theme (sky/sky/zinc, close to VS Code's own accent —
+changed from an earlier warm orange/amber/stone palette 2026-09-23, asked
+for directly) since 2026-09-22, not the Gradio default — see §1r.
 
 **Backdrops now come in three categories** (§1o, §1r, §1s, §1v): **Plain**
 (one procedural preset, `studio_ivory`, white/neutral — cut from 40 on

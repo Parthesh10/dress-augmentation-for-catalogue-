@@ -948,9 +948,23 @@ for the reasoning behind each):
     )
 
 
-#: A warm, muted theme -- matches this library's own occasionwear palette
-#: rather than Gradio's default blue, and reads as "a catalogue tool" more
-#: than "a generic ML demo".
+#: A calm, muted blue -- asked for directly, 2026-09-23, as "soothing, like
+#: VS Code blue": `sky_600` (`#0284c7`) sits close to VS Code's own accent
+#: (`#007ACC`), checked hex-by-hex against Gradio's built-in hue tables
+#: rather than picking "blue" by name and hoping (Tailwind's plain "blue"
+#: leans noticeably more purple -- `#2563eb` -- which reads as a generic
+#: web-app blue, not the flatter cyan-leaning blue VS Code actually uses).
+#: `neutral_hue="zinc"` for the same reason on the grey side: VS Code's own
+#: dark background (`#1e1e1e`) is close to true achromatic grey, and `zinc`
+#: is the least blue/brown-tinted of Gradio's built-in neutrals -- `stone`
+#: (the previous warm palette's neutral) or `gray`/`slate` would each pull
+#: panel backgrounds toward a tint VS Code's own chrome doesn't have.
+#:
+#: Was orange/amber/stone (a warm occasionwear palette) before this. The
+#: `.set()` overrides below reference relative theme tokens (`*neutral_700`
+#: etc.), not literal hex, specifically so a hue swap like this one only
+#: needs the three names above changed -- see each override's own comment
+#: for why it exists.
 #:
 #: Two `.set()` overrides, added 2026-09-23 after a real dark-mode screenshot
 #: showed why "no overrides" wasn't actually safe: Soft's own *default* dark
@@ -965,7 +979,7 @@ for the reasoning behind each):
 #: (`gr.themes.Soft(...).block_label_background_fill_dark` etc.) before
 #: picking replacements, not guessed.
 _THEME = gr.themes.Soft(
-    primary_hue="orange", secondary_hue="amber", neutral_hue="stone",
+    primary_hue="sky", secondary_hue="sky", neutral_hue="zinc",
 ).set(
     block_label_background_fill_dark="*neutral_700",
     block_label_text_color_dark="*primary_300",
