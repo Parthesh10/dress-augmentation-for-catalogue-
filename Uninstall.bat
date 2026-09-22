@@ -35,9 +35,31 @@ if errorlevel 2 (
 )
 
 echo.
+echo Stopping Dress Studio if it's currently running ...
+rem A running server holds every .dll/.pyd it loaded open, and Windows
+rem won't delete a file a process still has open -- found on a real run:
+rem rmdir hit "Access is denied" on dozens of files (torch, numpy, pandas,
+rem pyarrow's native extensions, and python.exe itself) because the app
+rem was still running when uninstall started. run.ps1 already stops a
+rem stale server before starting one; this needs the same step before
+rem deleting, not after finding out the hard way.
+> "%TEMP%\dressstudio_stop_server.ps1" (
+    echo Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue ^|
+    echo     Where-Object { $_.CommandLine -match 'dressaug\.ui' } ^|
+    echo     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    echo Start-Sleep -Milliseconds 800
+)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%TEMP%\dressstudio_stop_server.ps1"
+del "%TEMP%\dressstudio_stop_server.ps1" >nul 2>&1
+
 echo Removing installed environments ...
 if exist "%APP_DIR%\.venv" rmdir /s /q "%APP_DIR%\.venv"
 if exist "%APP_DIR%\.venv-torch" rmdir /s /q "%APP_DIR%\.venv-torch"
+if exist "%APP_DIR%\.venv" (
+    echo WARNING: some files in .venv could not be removed -- Dress Studio
+    echo may still be running, or another program has a file open. Close
+    echo it and run this uninstaller again.
+)
 
 echo Removing desktop shortcuts ...
 del "%USERPROFILE%\Desktop\Dress Studio.lnk" >nul 2>&1
